@@ -68,7 +68,8 @@ object Textures {
      */
     fun makeShip(col: Int, seed: Int, mask: Int): Bitmap {
         val t = 64
-        val px = IntArray(t * t)
+        val big = 128
+        val px = IntArray(big * big)
         val up = mask and 1 != 0
         val right = mask and 2 != 0
         val down = mask and 4 != 0
@@ -92,9 +93,9 @@ object Textures {
             corner -> 6f
             else -> 0f
         }
-        for (y in 0 until t) for (x in 0 until t) {
-            val fx = x + 0.5f
-            val fy = y + 0.5f
+        for (y in 0 until big) for (x in 0 until big) {
+            val fx = (x + 0.5f) * t / big
+            val fy = (y + 0.5f) * t / big
             var d = 1000f
             if (!left) d = min(d, fx - iL)
             if (!right) d = min(d, (t - iR) - fx)
@@ -119,13 +120,13 @@ object Textures {
 
             val u = fx / t
             val v = fy / t
-            val n = Noise.fbm(x * 0.05f, y * 0.3f, sd, 3)
-            val grain = Noise.fbm(x * 0.7f, y * 0.7f, sd + 9f, 2)
+            val n = Noise.fbm(fx * 0.05f, fy * 0.3f, sd, 3)
+            val grain = Noise.fbm(fx * 0.7f, fy * 0.7f, sd + 9f, 2)
             var lum = (1.2f - 0.65f * ((u + v) / 2f)) * (0.75f + 0.4f * n) * (0.9f + 0.2f * grain)
             var r = 66f * lum; var g = 74f * lum; var b = 92f * lum
 
             // costuras de paneles
-            if (d > 6f && ((x % 32) < 1 || (y % 32) < 1)) { r *= 0.55f; g *= 0.55f; b *= 0.6f }
+            if (d > 6f && ((fx.toInt() % 32) < 1 || (fy.toInt() % 32) < 1)) { r *= 0.55f; g *= 0.55f; b *= 0.6f }
             // remaches
             if (d > 8f) {
                 for (rv in 0 until 4) {
@@ -175,9 +176,61 @@ object Textures {
                 val f = if (min(fx, fy) < min(t - fx, t - fy)) 1.45f else 0.6f
                 r *= f; g *= f; b *= f
             }
-            px[y * t + x] = Color.argb(cl(255f * alpha), cl(r), cl(g), cl(b))
+            px[y * big + x] = Color.argb(cl(255f * alpha), cl(r), cl(g), cl(b))
         }
-        return Bitmap.createBitmap(px, t, t, Bitmap.Config.ARGB_8888)
+        val bmp = Bitmap.createBitmap(px, big, big, Bitmap.Config.ARGB_8888)
+        bmp.setHasMipMap(true)
+        return bmp
+    }
+
+    /** Roca irregular con relieve e iluminación lateral. */
+    fun makeRock(size: Int, seed: Int): Bitmap {
+        val px = IntArray(size * size)
+        val h = size / 2f
+        val sd = seed * 3.7f
+        for (y in 0 until size) for (x in 0 until size) {
+            val nx = (x + 0.5f - h) / h
+            val ny = (y + 0.5f - h) / h
+            val ang = kotlin.math.atan2(ny, nx)
+            val rad = 0.70f + 0.24f * Noise.fbm(kotlin.math.cos(ang) * 1.6f + sd, kotlin.math.sin(ang) * 1.6f, sd * 0.7f, 3)
+            val dist = sqrt(nx * nx + ny * ny)
+            if (dist > rad + 0.04f) continue
+            val edge = ((rad + 0.04f - dist) / 0.05f).coerceIn(0f, 1f)
+            val q = dist / rad
+            val z = sqrt(max(0f, 1f - q * q))
+            val dot = (nx / rad) * -0.5f + (ny / rad) * -0.5f + z * 0.7f
+            val cr = Noise.fbm(nx * 3.2f + sd, ny * 3.2f, 2f, 4)
+            val grain = Noise.fbm(nx * 9f + sd, ny * 9f, 5f, 3)
+            val shade = (0.22f + 0.95f * max(0f, dot) + (cr - 0.5f) * 0.55f) * (0.8f + 0.4f * grain)
+            val r = 128f * shade; val g = 112f * shade; val b = 98f * shade
+            px[y * size + x] = Color.argb(cl(255f * edge), cl(r), cl(g), cl(b))
+        }
+        return Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888)
+    }
+
+    /** Luna con cráteres y terminador. */
+    fun makeMoon(size: Int, seed: Int, tint: Int): Bitmap {
+        val px = IntArray(size * size)
+        val h = size / 2f
+        val sd = seed * 5.1f
+        val tr = Color.red(tint).toFloat(); val tg = Color.green(tint).toFloat(); val tb = Color.blue(tint).toFloat()
+        for (y in 0 until size) for (x in 0 until size) {
+            val nx = (x + 0.5f - h) / h
+            val ny = (y + 0.5f - h) / h
+            val rr = nx * nx + ny * ny
+            if (rr >= 1.03f) continue
+            val edge = if (rr <= 1f) 1f else (1.03f - rr) / 0.03f
+            val nz = sqrt(max(0f, 1f - rr))
+            val n1 = Noise.fbm(nx * 2f + sd, ny * 2f, nz * 2f, 5)
+            val crater = smooth(0.60f, 0.70f, Noise.fbm(nx * 4.5f + sd, ny * 4.5f, nz * 4.5f + 3f, 3))
+            val dot = nx * -0.62f + ny * -0.38f + nz * 0.68f
+            val lit = (0.05f + 0.95f * smooth(-0.1f, 0.45f, dot))
+            val base = (0.75f + 0.5f * n1) * (1f - 0.35f * crater)
+            val limb = 0.6f + 0.4f * sqrt(nz)
+            val f = base * lit * limb
+            px[y * size + x] = Color.argb(cl(255f * edge), cl(tr * f), cl(tg * f), cl(tb * f))
+        }
+        return Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888)
     }
 
     /** Halo suave para dar brillo (se dibuja con mezcla aditiva). */
@@ -217,7 +270,7 @@ object Textures {
      * Devuelve también posiciones de ciudades (normalizadas al disco, -1..1) para efectos; la primera
      * es la más cercana al centro y sirve de epicentro.
      */
-    fun makePlanet(radius: Int): PlanetData {
+    fun makePlanet(radius: Int, skin: Skin = Skins.all[0]): PlanetData {
         val d = radius * 2
         val px = IntArray(d * d)
         var lx = -0.62f; var ly = -0.38f; var lz = 0.68f
@@ -227,6 +280,16 @@ object Textures {
         val hl = sqrt(hx * hx + hy * hy + hz * hz)
         hx /= hl; hy /= hl; hz /= hl
         val cand = ArrayList<FloatArray>()
+        val oDr = Color.red(skin.oceanDeep).toFloat(); val oDg = Color.green(skin.oceanDeep).toFloat(); val oDb = Color.blue(skin.oceanDeep).toFloat()
+        val oSr = Color.red(skin.oceanShallow).toFloat(); val oSg = Color.green(skin.oceanShallow).toFloat(); val oSb = Color.blue(skin.oceanShallow).toFloat()
+        val lLr = Color.red(skin.landLow).toFloat(); val lLg = Color.green(skin.landLow).toFloat(); val lLb = Color.blue(skin.landLow).toFloat()
+        val lHr = Color.red(skin.landHigh).toFloat(); val lHg = Color.green(skin.landHigh).toFloat(); val lHb = Color.blue(skin.landHigh).toFloat()
+        val dsr = Color.red(skin.desert).toFloat(); val dsg = Color.green(skin.desert).toFloat(); val dsb = Color.blue(skin.desert).toFloat()
+        val icr = Color.red(skin.ice).toFloat(); val icg = Color.green(skin.ice).toFloat(); val icb = Color.blue(skin.ice).toFloat()
+        val clr = Color.red(skin.cloud).toFloat(); val clg = Color.green(skin.cloud).toFloat(); val clb = Color.blue(skin.cloud).toFloat()
+        val atr = Color.red(skin.atmo) / 255f; val atg = Color.green(skin.atmo) / 255f; val atb = Color.blue(skin.atmo) / 255f
+        val ctr = Color.red(skin.city).toFloat(); val ctg = Color.green(skin.city).toFloat(); val ctb = Color.blue(skin.city).toFloat()
+        val thr = skin.landThr
         for (y in 0 until d) for (x in 0 until d) {
             val nx = (x + 0.5f - radius) / radius
             val ny = (y + 0.5f - radius) / radius
@@ -242,33 +305,33 @@ object Textures {
             val c2 = Noise.fbm(sx + lx * 0.05f, sy + ly * 0.05f, sz + lz * 0.05f, 6)
             val moist = Noise.fbm(sx * 2f + 11f, sy * 2f, sz * 2f, 4)
             val lat = abs(qy)
-            val land = smooth(0.50f, 0.535f, c)
+            val land = smooth(thr, thr + 0.035f, c)
             var r: Float; var g: Float; var b: Float
-            val depth = smooth(0.30f, 0.52f, c)
-            val orr = 4f + 24f * depth; val og = 22f + 78f * depth; val ob = 62f + 90f * depth
-            val e = ((c - 0.535f) / 0.25f).coerceIn(0f, 1f)
+            val depth = smooth(thr - 0.20f, thr + 0.02f, c)
+            val orr = oDr + (oSr - oDr) * depth; val og = oDg + (oSg - oDg) * depth; val ob = oDb + (oSb - oDb) * depth
+            val e = ((c - thr - 0.035f) / 0.25f).coerceIn(0f, 1f)
             var lr: Float; var lg: Float; var lb: Float
-            if (moist < 0.45f && lat < 0.62f) { lr = 176f; lg = 148f; lb = 96f }
-            else { lr = 44f; lg = 92f; lb = 40f }
-            lr += (125f - lr) * e * 0.8f; lg += (118f - lg) * e * 0.8f; lb += (108f - lb) * e * 0.8f
+            if (moist < 0.45f && lat < 0.62f) { lr = dsr; lg = dsg; lb = dsb }
+            else { lr = lLr; lg = lLg; lb = lLb }
+            lr += (lHr - lr) * e * 0.8f; lg += (lHg - lg) * e * 0.8f; lb += (lHb - lb) * e * 0.8f
             // relieve: sombreado según la pendiente en dirección de la luz
             val bump = ((c - c2) * 16f).coerceIn(-0.4f, 0.4f) * land
             r = orr + (lr - orr) * land; g = og + (lg - og) * land; b = ob + (lb - ob) * land
             r *= 1f + bump; g *= 1f + bump; b *= 1f + bump
-            val ice = smooth(0.80f, 0.90f, lat + (Noise.fbm(sx * 3f, sy * 3f, sz * 3f, 3) - 0.5f) * 0.18f)
-            r += (238f - r) * ice; g += (243f - g) * ice; b += (252f - b) * ice
+            val ice = smooth(0.80f - skin.iceBias, 0.90f - skin.iceBias, lat + (Noise.fbm(sx * 3f, sy * 3f, sz * 3f, 3) - 0.5f) * 0.18f)
+            r += (icr - r) * ice; g += (icg - g) * ice; b += (icb - b) * ice
             val oceanMask = (1f - land) * (1f - ice)
             val cn = Noise.fbm(sx * 1.5f + 40f, sy * 2.4f, sz * 1.5f + 7f, 5)
-            val cloud = smooth(0.50f, 0.72f, cn) * 0.88f
+            val cloud = smooth(0.50f, 0.72f, cn) * skin.cloudAmt
             val dot = nx * lx + ny * ly + nz * lz
             val day = smooth(-0.10f, 0.40f, dot)
             val shadeV = 0.03f + 0.97f * day
-            r = (r * (1f - cloud) + 245f * cloud) * shadeV
-            g = (g * (1f - cloud) + 247f * cloud) * shadeV
-            b = (b * (1f - cloud) + 250f * cloud) * shadeV
+            r = (r * (1f - cloud) + clr * cloud) * shadeV
+            g = (g * (1f - cloud) + clg * cloud) * shadeV
+            b = (b * (1f - cloud) + clb * cloud) * shadeV
             val cityRaw = Noise.fbm(sx * 9f, sy * 9f, sz * 9f, 3)
             val cities = smooth(0.60f, 0.72f, cityRaw) * land * (1f - ice) * (1f - cloud) * (1f - day)
-            r += 255f * cities * 0.95f; g += 190f * cities * 0.95f; b += 100f * cities * 0.95f
+            r += ctr * cities * 0.95f; g += ctg * cities * 0.95f; b += ctb * cities * 0.95f
             if (cityRaw > 0.70f && land > 0.95f && ice < 0.1f && nz > 0.3f && ((x * 7 + y * 13) % 41 == 0)) {
                 cand.add(floatArrayOf(nx, ny))
             }
@@ -278,7 +341,7 @@ object Textures {
             r *= limb; g *= limb; b *= limb
             val fres = (1f - nz).pow(2.6f)
             val atm = fres * (0.18f + 0.82f * day)
-            r += 70f * atm * 1.4f; g += 140f * atm * 1.4f; b += 255f * atm * 1.4f
+            r += 255f * atr * atm * 1.4f; g += 255f * atg * atm * 1.4f; b += 255f * atb * atm * 1.4f
             px[y * d + x] = Color.argb(cl(255f * edge), cl(r), cl(g), cl(b))
         }
         if (cand.isEmpty()) cand.add(floatArrayOf(0.1f, 0.1f))

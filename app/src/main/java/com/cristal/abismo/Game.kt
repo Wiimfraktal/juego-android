@@ -1,6 +1,10 @@
 package com.cristal.abismo
 
 import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -128,18 +132,48 @@ class Game(val cols: Int, val rows: Int) {
         return true
     }
 
-    /** Arrastre libre en celdas (puede ser fraccionario). Nunca acerca la nave al centro. */
+    /** Mueve a una posición absoluta (órbita): el radio del pivote no puede disminuir. */
+    private fun tryMoveTo(p: Piece, nx: Float, ny: Float): Boolean {
+        if (nx < -1f || ny < -1f || nx > cols + 1f || ny > rows + 1f) return false
+        if (hits(p.cells, nx, ny)) return false
+        if (hypot(nx - cx, ny - cy) < hypot(p.fx - cx, p.fy - cy) - 1e-3f) return false
+        if (minDist2(p.cells, nx, ny) < minDist2(p.cells, p.fx, p.fy) - 0.4f) return false
+        p.fx = nx; p.fy = ny
+        updateDir()
+        return true
+    }
+
+    /**
+     * Arrastre libre en celdas. El desplazamiento se descompone en radial y tangencial respecto al centro:
+     * lo tangencial rota la nave alrededor del centro manteniendo el radio; lo radial solo hacia afuera.
+     */
     fun drag(dx: Float, dy: Float) {
         val p = piece ?: return
         if (over) return
         val n = max(1, Math.ceil((max(abs(dx), abs(dy)) / 0.2f).toDouble()).toInt())
         val sx = dx / n
         val sy = dy / n
-        for (i in 0 until n) {
-            if (!tryShift(p, sx, sy)) {
-                if (!tryShift(p, sx, 0f)) tryShift(p, 0f, sy)
-            }
+        for (i in 0 until n) orbitStep(p, sx, sy)
+    }
+
+    private fun orbitStep(p: Piece, dx: Float, dy: Float) {
+        val vx = p.fx - cx
+        val vy = p.fy - cy
+        val r = hypot(vx, vy)
+        if (r < 1.5f) {
+            if (!tryShift(p, dx, dy)) { if (!tryShift(p, dx, 0f)) tryShift(p, 0f, dy) }
+            return
         }
+        val erx = vx / r; val ery = vy / r
+        val rc = max(0f, dx * erx + dy * ery)
+        val tc = dx * (-ery) + dy * erx
+        val a0 = atan2(vy, vx)
+        val a1 = a0 + tc / r
+        // completo (tangencial + radial hacia afuera), solo tangencial, solo radial y por último ejes
+        if (tryMoveTo(p, cx + (r + rc) * cos(a1), cy + (r + rc) * sin(a1))) return
+        if (tryMoveTo(p, cx + r * cos(a1), cy + r * sin(a1))) return
+        if (rc > 0f && tryMoveTo(p, cx + (r + rc) * cos(a0), cy + (r + rc) * sin(a0))) return
+        if (!tryShift(p, dx, dy)) { if (!tryShift(p, dx, 0f)) tryShift(p, 0f, dy) }
     }
 
     fun rotate() {
