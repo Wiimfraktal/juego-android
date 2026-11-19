@@ -1,7 +1,7 @@
 # Abismo de Cristal
 
-Tetris invertido para Android (Kotlin, render 2.5D propio). Las piezas, cristales
-facetados, nacen en el centro y caen hacia el borde de la pantalla. Completa filas
+Tetris invertido espacial para Android (Kotlin, render 2.5D propio). Huyes de un planeta: las piezas, placas de casco con núcleo de energía,
+nacen en el centro y caen hacia el borde de la pantalla. Completa filas
 para limpiarlas. Pierdes si los cristales se acumulan hasta el centro.
 
 ## Instalar desde el celular

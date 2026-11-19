@@ -30,6 +30,9 @@ class Game(val cols: Int, val rows: Int) {
     var gx = 0
     var gy = 1
     var score = 0
+    var barProgress = 0
+    var barsFilled = 0
+    var ingots = 0
     var lines = 0
     var level = 1
     var over = false
@@ -43,12 +46,24 @@ class Game(val cols: Int, val rows: Int) {
     val bursts = ArrayList<IntArray>()
     var lockedFlash = 0f
 
+    fun barNeed() = 400 + 200 * barsFilled
+
+    private fun addScore(p: Int) {
+        score += p
+        barProgress += p
+        while (barProgress >= barNeed()) {
+            barProgress -= barNeed()
+            barsFilled++
+            ingots += 3
+        }
+    }
+
     private var timer = 0f
     private var nextType = Random.nextInt(Shapes.all.size)
 
     init { spawn() }
 
-    private fun interval() = maxOf(0.08f, 0.30f - 0.022f * (level - 1))
+    private fun interval() = maxOf(0.12f, 0.46f - 0.02f * (level - 1))
 
     private fun spawn() {
         val t = nextType
@@ -139,10 +154,10 @@ class Game(val cols: Int, val rows: Int) {
         val n = clearLines()
         if (n > 0) {
             lines += n
-            level = 1 + lines / 5
-            score += intArrayOf(0, 100, 300, 500, 800, 1000)[minOf(n, 5)] * level
+            level = 1 + lines / 6
+            addScore(intArrayOf(0, 100, 300, 500, 800, 1000)[minOf(n, 5)] * level)
         }
-        score += 10
+        addScore(10)
         if (danger && n == 0) { over = true; return }
         spawn()
     }
