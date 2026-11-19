@@ -52,7 +52,10 @@ class GameView(ctx: Context) : View(ctx) {
         const val COLS = 23
         const val LIFT_LOCKED = 0.30f
         const val LIFT_PIECE = 0.55f
-        const val EXPLOSION_TIME = 2.8f
+        const val EXPLOSION_TIME = 3.5f
+        const val HOLD = 0.9f      // la cámara se queda cerca mientras explota
+        const val PULL = 2.5f      // duración del alejamiento
+        const val MENU_SC = 1.9f
         val BASE = intArrayOf(
             Color.rgb(0, 229, 255), Color.rgb(255, 196, 0), Color.rgb(176, 64, 255),
             Color.rgb(0, 255, 140), Color.rgb(255, 40, 150), Color.rgb(50, 110, 255),
@@ -152,6 +155,8 @@ class GameView(ctx: Context) : View(ctx) {
     private val tabRect0 = RectF()
     private val tabRect1 = RectF()
     private val buyRect = RectF()
+    private val menuRect = RectF()
+    private var confirmExit = false
     private var cardW = 0f
     private var cardH = 0f
     private var cardsTop = 0f
@@ -205,7 +210,8 @@ class GameView(ctx: Context) : View(ctx) {
         ccx = ox + (COLS / 2 + 0.5f) * s
         ccy = oy + (rows / 2 + 0.5f) * s
         planetR = w * 0.27f
-        planetSc = 1.5f
+        planetSc = MENU_SC
+        confirmExit = false
         phase = 0; phaseT = 0f; tab = 0
         preview = skinSel
         seenIngots = 0; seenBars = 0; dispFrac = 0f
@@ -221,6 +227,7 @@ class GameView(ctx: Context) : View(ctx) {
         barY1 = barY0 + u * 0.42f
         pauseRect.set(w / 2f - u * 0.7f, top - u * 0.75f, w / 2f + u * 0.7f, top + u * 0.3f)
         resumeRect.set(w / 2f - u * 3f, h / 2f + u * 0.2f, w / 2f + u * 3f, h / 2f + u * 1.6f)
+        menuRect.set(w / 2f - u * 3.6f, h / 2f + u * 2.0f, w / 2f + u * 3.6f, h / 2f + u * 3.3f)
         escapeRect.set(w / 2f - u * 3.6f, h * 0.80f, w / 2f + u * 3.6f, h * 0.80f + u * 1.6f)
         val tb = topInset + u * 0.45f
         tabRect0.set(u * 0.4f, tb, w / 2f - u * 0.1f, tb + u * 0.95f)
@@ -303,21 +310,28 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
-    /** Genera en segundo plano rocas, lunas, naves, el planeta equipado y las miniaturas de skins. */
+    /** Genera (o carga del disco) el planeta equipado, las naves, rocas, lunas y miniaturas en segundo plano. */
     private fun startLoading() {
         if (loading) return
         loading = true
         skinLoading[skinSel] = true
-        val pr = planetR.toInt()
+        val pr = (planetR * 1.3f).toInt()
         val thumbR = (u * 1.3f).toInt()
+        val dir = context.cacheDir
         Thread {
+            val first = DiskCache.loadPlanet(dir, skinSel, pr)
+                ?: Textures.makePlanet(pr, skins[skinSel]).also { DiskCache.savePlanet(dir, skinSel, pr, it) }
+            cache[skinSel] = first
+            postInvalidate()
+            ships = DiskCache.loadShips(dir, BASE.size * 16)
+                ?: Textures.makeShipTiles(BASE).also { DiskCache.saveShips(dir, it) }
+            postInvalidate()
             rocks = Array(5) { Textures.makeRock(96, it * 7 + 1) }
             moons = Array(3) { Textures.makeMoon(96, it + 1, MOON_TINTS[it]) }
-            ships = Textures.makeShipTiles(BASE)
-            postInvalidate()
-            cache[skinSel] = Textures.makePlanet(pr, skins[skinSel])
-            postInvalidate()
-            for (i in skins.indices) thumbs[i] = Textures.makePlanet(thumbR, skins[i]).bmp
+            for (i in skins.indices) {
+                thumbs[i] = DiskCache.loadThumb(dir, i, thumbR)
+                    ?: Textures.makePlanet(thumbR, skins[i]).bmp.also { DiskCache.saveThumb(dir, i, thumbR, it) }
+            }
             postInvalidate()
         }.start()
     }
@@ -325,9 +339,11 @@ class GameView(ctx: Context) : View(ctx) {
     private fun requestSkin(i: Int) {
         if (cache[i] != null || skinLoading[i]) return
         skinLoading[i] = true
-        val pr = planetR.toInt()
+        val pr = (planetR * 1.3f).toInt()
+        val dir = context.cacheDir
         Thread {
-            cache[i] = Textures.makePlanet(pr, skins[i])
+            cache[i] = DiskCache.loadPlanet(dir, i, pr)
+                ?: Textures.makePlanet(pr, skins[i]).also { DiskCache.savePlanet(dir, i, pr, it) }
             postInvalidate()
         }.start()
     }
@@ -359,17 +375,23 @@ class GameView(ctx: Context) : View(ctx) {
         }
         updateParticles(dt, g)
 
-        val target = when {
-            phase == 0 -> 1.5f + 0.02f * sin(time * 0.6f)
-            phase == 1 -> 1f + 0.5f * (1f - (phaseT / EXPLOSION_TIME).coerceIn(0f, 1f))
-            g.over -> 1.45f
-            else -> 1f + 0.22f * (1f - ((near - 1) / 8f)).coerceIn(0f, 1f)
+        // cámara: cerca en el menú; al explotar se queda cerca un momento y luego se aleja suave hasta la vista de juego
+        val pull = ((phaseT - HOLD) / PULL).coerceIn(0f, 1f)
+        if (phase == 1) {
+            val e = pull * pull * (3f - 2f * pull)
+            planetSc = MENU_SC + (1f - MENU_SC) * e
+        } else {
+            val target = when {
+                phase == 0 -> (if (tab == 1) 1.45f else MENU_SC) + 0.02f * sin(time * 0.6f)
+                g.over -> 1.45f
+                else -> 1f + 0.22f * (1f - ((near - 1) / 8f)).coerceIn(0f, 1f)
+            }
+            planetSc += (target - planetSc) * min(1f, dt * 2.5f)
         }
-        planetSc += (target - planetSc) * min(1f, dt * 2.5f)
 
         val starTarget = when {
             phase == 0 -> 0.12f
-            phase == 1 -> 0.12f + 0.88f * (phaseT / EXPLOSION_TIME).coerceIn(0f, 1f)
+            phase == 1 -> 0.12f + 0.88f * pull
             g.over -> 0.15f
             else -> ((near - 1) / 8f).coerceIn(0.10f, 1f)
         }
@@ -834,10 +856,11 @@ class GameView(ctx: Context) : View(ctx) {
             if (v == 0) continue
             xs[k] = x; ys[k] = y; ts[k] = v - 1
             var m = 0
-            if (y > 0 && g.grid[y - 1][x] == v) m = m or 1
-            if (x < g.cols - 1 && g.grid[y][x + 1] == v) m = m or 2
-            if (y < g.rows - 1 && g.grid[y + 1][x] == v) m = m or 4
-            if (x > 0 && g.grid[y][x - 1] == v) m = m or 8
+            val id = g.ids[y][x]
+            if (y > 0 && g.ids[y - 1][x] == id) m = m or 1
+            if (x < g.cols - 1 && g.ids[y][x + 1] == id) m = m or 2
+            if (y < g.rows - 1 && g.ids[y + 1][x] == id) m = m or 4
+            if (x > 0 && g.ids[y][x - 1] == id) m = m or 8
             ms[k] = m
             k++
         }
@@ -1240,6 +1263,11 @@ class GameView(ctx: Context) : View(ctx) {
         paint.color = Color.WHITE
         paint.textSize = u * 0.6f
         c.drawText("Continuar", width / 2f, resumeRect.centerY() + u * 0.22f, paint)
+        paint.color = if (confirmExit) Color.rgb(170, 50, 50) else Color.argb(255, 60, 40, 50)
+        c.drawRoundRect(menuRect, u * 0.4f, u * 0.4f, paint)
+        paint.color = Color.WHITE
+        paint.textSize = u * 0.45f
+        c.drawText(if (confirmExit) "¿Seguro? Se pierde la partida" else "Salir al menú", width / 2f, menuRect.centerY() + u * 0.16f, paint)
     }
 
     // ---------- entrada ----------
@@ -1286,7 +1314,10 @@ class GameView(ctx: Context) : View(ctx) {
                 } else if (phase == 1) {
                     // la explosión no se interrumpe
                 } else if (paused) {
-                    if (resumeRect.contains(e.x, e.y) || pauseRect.contains(e.x, e.y)) { paused = false; last = 0L }
+                    if (resumeRect.contains(e.x, e.y) || pauseRect.contains(e.x, e.y)) { paused = false; confirmExit = false; last = 0L }
+                    else if (menuRect.contains(e.x, e.y)) {
+                        if (confirmExit) layoutGame() else confirmExit = true
+                    } else confirmExit = false
                 } else if (downOnPause && pauseRect.contains(e.x, e.y)) {
                     paused = true
                 } else if (g.over) {

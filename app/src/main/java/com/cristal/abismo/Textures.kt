@@ -58,8 +58,23 @@ object Textures {
     private fun cl(v: Float) = v.toInt().coerceIn(0, 255)
 
     /** 7 tipos x 16 máscaras de vecinos (1 arriba, 2 derecha, 4 abajo, 8 izquierda). */
-    fun makeShipTiles(colors: IntArray): Array<Bitmap> =
-        Array(colors.size * 16) { makeShip(colors[it / 16], (it / 16) * 17 + 3, it % 16) }
+    fun makeShipTiles(colors: IntArray): Array<Bitmap> {
+        val n = colors.size * 16
+        val out = arrayOfNulls<Bitmap>(n)
+        val next = java.util.concurrent.atomic.AtomicInteger(0)
+        val nt = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+        val ths = Array(nt) {
+            Thread {
+                while (true) {
+                    val i = next.getAndIncrement()
+                    if (i >= n) break
+                    out[i] = makeShip(colors[i / 16], (i / 16) * 17 + 3, i % 16)
+                }
+            }.also { t -> t.start() }
+        }
+        for (t in ths) t.join()
+        return Array(n) { out[it]!! }
+    }
 
     /**
      * Sección de una nave enemiga. Los lados con vecino continúan el casco; los abiertos llevan borde,
@@ -273,12 +288,10 @@ object Textures {
     fun makePlanet(radius: Int, skin: Skin = Skins.all[0]): PlanetData {
         val d = radius * 2
         val px = IntArray(d * d)
-        var lx = -0.62f; var ly = -0.38f; var lz = 0.68f
-        val ll = sqrt(lx * lx + ly * ly + lz * lz)
-        lx /= ll; ly /= ll; lz /= ll
-        var hx = lx; var hy = ly; var hz = lz + 1f
-        val hl = sqrt(hx * hx + hy * hy + hz * hz)
-        hx /= hl; hy /= hl; hz /= hl
+        val ll = sqrt(0.62f * 0.62f + 0.38f * 0.38f + 0.68f * 0.68f)
+        val lx = -0.62f / ll; val ly = -0.38f / ll; val lz = 0.68f / ll
+        val hl = sqrt(lx * lx + ly * ly + (lz + 1f) * (lz + 1f))
+        val hx = lx / hl; val hy = ly / hl; val hz = (lz + 1f) / hl
         val cand = ArrayList<FloatArray>()
         val oDr = Color.red(skin.oceanDeep).toFloat(); val oDg = Color.green(skin.oceanDeep).toFloat(); val oDb = Color.blue(skin.oceanDeep).toFloat()
         val oSr = Color.red(skin.oceanShallow).toFloat(); val oSg = Color.green(skin.oceanShallow).toFloat(); val oSb = Color.blue(skin.oceanShallow).toFloat()
@@ -290,7 +303,8 @@ object Textures {
         val atr = Color.red(skin.atmo) / 255f; val atg = Color.green(skin.atmo) / 255f; val atb = Color.blue(skin.atmo) / 255f
         val ctr = Color.red(skin.city).toFloat(); val ctg = Color.green(skin.city).toFloat(); val ctb = Color.blue(skin.city).toFloat()
         val thr = skin.landThr
-        for (y in 0 until d) for (x in 0 until d) {
+        fun work(ya: Int, yb: Int, out: ArrayList<FloatArray>) {
+        for (y in ya until yb) for (x in 0 until d) {
             val nx = (x + 0.5f - radius) / radius
             val ny = (y + 0.5f - radius) / radius
             val rr = nx * nx + ny * ny
@@ -302,10 +316,10 @@ object Textures {
             val qz = nz * 0.92f - ny * 0.39f
             val sx = qx * 1.7f + 3.1f; val sy = qy * 1.7f + 1.7f; val sz = qz * 1.7f + 5.3f
             val c = Noise.fbm(sx, sy, sz, 6)
-            val c2 = Noise.fbm(sx + lx * 0.05f, sy + ly * 0.05f, sz + lz * 0.05f, 6)
-            val moist = Noise.fbm(sx * 2f + 11f, sy * 2f, sz * 2f, 4)
             val lat = abs(qy)
             val land = smooth(thr, thr + 0.035f, c)
+            val c2 = if (land > 0.02f) Noise.fbm(sx + lx * 0.05f, sy + ly * 0.05f, sz + lz * 0.05f, 6) else c
+            val moist = if (land > 0.02f) Noise.fbm(sx * 2f + 11f, sy * 2f, sz * 2f, 4) else 0.5f
             var r: Float; var g: Float; var b: Float
             val depth = smooth(thr - 0.20f, thr + 0.02f, c)
             val orr = oDr + (oSr - oDr) * depth; val og = oDg + (oSg - oDg) * depth; val ob = oDb + (oSb - oDb) * depth
@@ -318,7 +332,7 @@ object Textures {
             val bump = ((c - c2) * 16f).coerceIn(-0.4f, 0.4f) * land
             r = orr + (lr - orr) * land; g = og + (lg - og) * land; b = ob + (lb - ob) * land
             r *= 1f + bump; g *= 1f + bump; b *= 1f + bump
-            val ice = smooth(0.80f - skin.iceBias, 0.90f - skin.iceBias, lat + (Noise.fbm(sx * 3f, sy * 3f, sz * 3f, 3) - 0.5f) * 0.18f)
+            val ice = smooth(0.80f - skin.iceBias, 0.90f - skin.iceBias, lat + (if (lat > 0.45f) Noise.fbm(sx * 3f, sy * 3f, sz * 3f, 3) - 0.5f else 0f) * 0.18f)
             r += (icr - r) * ice; g += (icg - g) * ice; b += (icb - b) * ice
             val oceanMask = (1f - land) * (1f - ice)
             val cn = Noise.fbm(sx * 1.5f + 40f, sy * 2.4f, sz * 1.5f + 7f, 5)
@@ -329,11 +343,11 @@ object Textures {
             r = (r * (1f - cloud) + clr * cloud) * shadeV
             g = (g * (1f - cloud) + clg * cloud) * shadeV
             b = (b * (1f - cloud) + clb * cloud) * shadeV
-            val cityRaw = Noise.fbm(sx * 9f, sy * 9f, sz * 9f, 3)
+            val cityRaw = if (land > 0.5f) Noise.fbm(sx * 9f, sy * 9f, sz * 9f, 3) else 0f
             val cities = smooth(0.60f, 0.72f, cityRaw) * land * (1f - ice) * (1f - cloud) * (1f - day)
             r += ctr * cities * 0.95f; g += ctg * cities * 0.95f; b += ctb * cities * 0.95f
             if (cityRaw > 0.70f && land > 0.95f && ice < 0.1f && nz > 0.3f && ((x * 7 + y * 13) % 41 == 0)) {
-                cand.add(floatArrayOf(nx, ny))
+                out.add(floatArrayOf(nx, ny))
             }
             val sp = max(0f, nx * hx + ny * hy + nz * hz).pow(80f) * oceanMask * (1f - cloud) * 0.85f
             r += 255f * sp; g += 255f * sp; b += 240f * sp
@@ -344,6 +358,12 @@ object Textures {
             r += 255f * atr * atm * 1.4f; g += 255f * atg * atm * 1.4f; b += 255f * atb * atm * 1.4f
             px[y * d + x] = Color.argb(cl(255f * edge), cl(r), cl(g), cl(b))
         }
+        }
+        val nt = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+        val parts = Array(nt) { ArrayList<FloatArray>() }
+        val ths = Array(nt) { i -> Thread { work(d * i / nt, d * (i + 1) / nt, parts[i]) }.also { t -> t.start() } }
+        for (t in ths) t.join()
+        for (p in parts) cand.addAll(p)
         if (cand.isEmpty()) cand.add(floatArrayOf(0.1f, 0.1f))
         cand.sortBy { it[0] * it[0] + it[1] * it[1] }
         val first = cand[0]

@@ -34,6 +34,9 @@ class Game(val cols: Int, val rows: Int) {
     val cx = cols / 2
     val cy = rows / 2
     val grid = Array(rows) { IntArray(cols) }
+    /** Identificador de nave por celda (0 = vacío), para borrar naves completas. */
+    val ids = Array(rows) { IntArray(cols) }
+    private var nextId = 1
 
     var piece: Piece? = null
     var gx = 0
@@ -254,12 +257,14 @@ class Game(val cols: Int, val rows: Int) {
         val p = piece ?: return
         if (!snap(p)) { over = true; return }
         var danger = false
+        val id = nextId++
         val ix = p.fx.toInt()
         val iy = p.fy.toInt()
         for (c in p.cells) {
             val x = ix + c[0]
             val y = iy + c[1]
             grid[y][x] = p.type + 1
+            ids[y][x] = id
             ironDrops.add(intArrayOf(x, y, 10))
             if (abs(x - cx) <= 1 && abs(y - cy) <= 1) danger = true
         }
@@ -278,27 +283,21 @@ class Game(val cols: Int, val rows: Int) {
     private fun rowFull(y: Int) = grid[y].all { it != 0 }
     private fun colFull(x: Int) = (0 until rows).all { grid[it][x] != 0 }
 
+    /** Al completar una línea se destruyen las naves enteras que la tocan (no quedan restos de 1x1). */
     private fun clearLines(): Int {
         val fr = (0 until rows).filter { it != cy && rowFull(it) }
         val fc = (0 until cols).filter { it != cx && colFull(it) }
         if (fr.isEmpty() && fc.isEmpty()) return 0
-        for (y in fr) for (x in 0 until cols) { bursts.add(intArrayOf(x, y, grid[y][x])); ironDrops.add(intArrayOf(x, y, 15)); grid[y][x] = 0 }
-        for (x in fc) for (y in 0 until rows) {
-            if (grid[y][x] != 0) { bursts.add(intArrayOf(x, y, grid[y][x])); ironDrops.add(intArrayOf(x, y, 15)) }
-            grid[y][x] = 0
-        }
-        // las filas se acercan al borde (hacia afuera) para rellenar huecos
-        if (fr.isNotEmpty()) {
-            val top = (0 until cy).filter { it !in fr }.map { grid[it].copyOf() }
-            for (i in 0 until cy) grid[i] = if (i < top.size) top[i] else IntArray(cols)
-            val bottom = (rows - 1 downTo cy + 1).filter { it !in fr }.map { grid[it].copyOf() }
-            for (j in 0 until rows - 1 - cy) grid[rows - 1 - j] = if (j < bottom.size) bottom[j] else IntArray(cols)
-        }
-        if (fc.isNotEmpty()) {
-            val left = (0 until cx).filter { it !in fc }.map { x -> IntArray(rows) { grid[it][x] } }
-            for (i in 0 until cx) for (y in 0 until rows) grid[y][i] = if (i < left.size) left[i][y] else 0
-            val right = (cols - 1 downTo cx + 1).filter { it !in fc }.map { x -> IntArray(rows) { grid[it][x] } }
-            for (j in 0 until cols - 1 - cx) for (y in 0 until rows) grid[y][cols - 1 - j] = if (j < right.size) right[j][y] else 0
+        val kill = HashSet<Int>()
+        for (y in fr) for (x in 0 until cols) kill.add(ids[y][x])
+        for (x in fc) for (y in 0 until rows) kill.add(ids[y][x])
+        for (y in 0 until rows) for (x in 0 until cols) {
+            if (grid[y][x] != 0 && ids[y][x] in kill) {
+                bursts.add(intArrayOf(x, y, grid[y][x]))
+                ironDrops.add(intArrayOf(x, y, 15))
+                grid[y][x] = 0
+                ids[y][x] = 0
+            }
         }
         return fr.size + fc.size
     }
