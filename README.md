@@ -1,8 +1,8 @@
 # Abismo de Cristal
 
-Tetris invertido espacial para Android (Kotlin, render 2.5D propio). Huyes de un planeta: las piezas, placas de casco con núcleo de energía,
-nacen en el centro y caen hacia el borde de la pantalla. Completa filas
-para limpiarlas. Pierdes si los cristales se acumulan hasta el centro.
+Tetris invertido espacial para Android (Kotlin, render 2.5D propio). Huyes de un planeta: las naves enemigas
+te persiguen desde el centro; empújalas hacia el borde. Completa filas
+para limpiarlas y suelta hierro para llenar la barra. Pierdes si te alcanzan en el centro.
 
 ## Instalar desde el celular
 
@@ -14,6 +14,6 @@ El APK se compila solo en GitHub Actions con cada cambio en `main`.
 
 ## Controles
 
-- Deslizar: mueve la pieza y cambia hacia dónde cae.
+- Arrastrar: mueve la nave libremente (nunca hacia el centro).
 - Tocar: gira la pieza.
-- Deslizar rápido: la suelta de golpe.
+- Empujón rápido hacia afuera: la lanza de golpe.

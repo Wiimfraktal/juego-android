@@ -13,7 +13,15 @@ class MainActivity : Activity() {
             window.attributes.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-        setContentView(GameView(this))
+        view = GameView(this)
+        setContentView(view)
+    }
+
+    private lateinit var view: GameView
+
+    override fun onPause() {
+        super.onPause()
+        view.pause()
     }
 
     @Suppress("DEPRECATION")

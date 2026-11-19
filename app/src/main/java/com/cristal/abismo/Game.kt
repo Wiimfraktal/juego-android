@@ -46,11 +46,15 @@ class Game(val cols: Int, val rows: Int) {
     val bursts = ArrayList<IntArray>()
     var lockedFlash = 0f
 
+    /** Hierro soltado (x, y, cantidad); la vista lo anima hasta la barra y luego llama addIron. */
+    val ironDrops = ArrayList<IntArray>()
+
     fun barNeed() = 400 + 200 * barsFilled
 
-    private fun addScore(p: Int) {
-        score += p
-        barProgress += p
+    private fun addScore(p: Int) { score += p }
+
+    fun addIron(a: Int) {
+        barProgress += a
         while (barProgress >= barNeed()) {
             barProgress -= barNeed()
             barsFilled++
@@ -58,12 +62,23 @@ class Game(val cols: Int, val rows: Int) {
         }
     }
 
+    private fun ring(x: Int, y: Int) = maxOf(Math.abs(x - cx), Math.abs(y - cy))
+
+    /** La caída siempre es hacia afuera del centro, según el eje dominante. */
+    private fun updateDir() {
+        val p = piece ?: return
+        val dx = p.px - cx
+        val dy = p.py - cy
+        if (Math.abs(dx) > Math.abs(dy)) { gx = if (dx > 0) 1 else -1; gy = 0 }
+        else if (Math.abs(dy) > Math.abs(dx)) { gx = 0; gy = if (dy > 0) 1 else -1 }
+    }
+
     private var timer = 0f
     private var nextType = Random.nextInt(Shapes.all.size)
 
     init { spawn() }
 
-    private fun interval() = maxOf(0.12f, 0.46f - 0.02f * (level - 1))
+    private fun interval() = maxOf(0.095f, 0.36f - 0.016f * (level - 1))
 
     private fun spawn() {
         val t = nextType
@@ -95,13 +110,16 @@ class Game(val cols: Int, val rows: Int) {
         if (collides(p.cells, p.px + dx, p.py + dy)) return false
         p.px += dx; p.py += dy
         visX -= dx; visY -= dy
+        updateDir()
         return true
     }
 
-    /** El jugador dirige la pieza: se mueve y además cambia hacia dónde cae. */
+    /** Movimiento libre del jugador, pero nunca hacia el centro: solo mantiene o aumenta la distancia. */
     fun steer(dx: Int, dy: Int) {
-        if (over || piece == null) return
-        if (move(dx, dy)) { gx = dx; gy = dy }
+        val p = piece ?: return
+        if (over) return
+        if (ring(p.px + dx, p.py + dy) < ring(p.px, p.py)) return
+        move(dx, dy)
     }
 
     fun rotate() {
@@ -113,6 +131,7 @@ class Game(val cols: Int, val rows: Int) {
             intArrayOf(0, 1), intArrayOf(0, -1), intArrayOf(2, 0), intArrayOf(-2, 0)
         )
         for (k in kicks) {
+            if (ring(p.px + k[0], p.py + k[1]) < ring(p.px, p.py)) continue
             if (!collides(rot, p.px + k[0], p.py + k[1])) {
                 p.cells = rot
                 p.px += k[0]; p.py += k[1]
@@ -121,10 +140,9 @@ class Game(val cols: Int, val rows: Int) {
         }
     }
 
-    fun hardDrop(dx: Int, dy: Int) {
+    fun hardDrop() {
         if (over || piece == null) return
-        gx = dx; gy = dy
-        while (move(dx, dy)) { /* sigue hasta chocar */ }
+        while (move(gx, gy)) { /* sigue hasta chocar */ }
         lock()
     }
 
@@ -147,6 +165,7 @@ class Game(val cols: Int, val rows: Int) {
             val x = p.px + c[0]
             val y = p.py + c[1]
             grid[y][x] = p.type + 1
+            ironDrops.add(intArrayOf(x, y, 10))
             if (Math.abs(x - cx) <= 1 && Math.abs(y - cy) <= 1) danger = true
         }
         piece = null
@@ -169,9 +188,9 @@ class Game(val cols: Int, val rows: Int) {
         val fr = (0 until rows).filter { it != cy && rowFull(it) }
         val fc = (0 until cols).filter { it != cx && colFull(it) }
         if (fr.isEmpty() && fc.isEmpty()) return 0
-        for (y in fr) for (x in 0 until cols) { bursts.add(intArrayOf(x, y, grid[y][x])); grid[y][x] = 0 }
+        for (y in fr) for (x in 0 until cols) { bursts.add(intArrayOf(x, y, grid[y][x])); ironDrops.add(intArrayOf(x, y, 15)); grid[y][x] = 0 }
         for (x in fc) for (y in 0 until rows) {
-            if (grid[y][x] != 0) bursts.add(intArrayOf(x, y, grid[y][x]))
+            if (grid[y][x] != 0) { bursts.add(intArrayOf(x, y, grid[y][x])); ironDrops.add(intArrayOf(x, y, 15)) }
             grid[y][x] = 0
         }
         // las filas se acercan al borde (hacia afuera) para rellenar huecos

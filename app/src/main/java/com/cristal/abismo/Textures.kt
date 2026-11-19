@@ -54,44 +54,60 @@ object Textures {
 
     private fun cl(v: Float) = v.toInt().coerceIn(0, 255)
 
-    /** Placa de casco metálica con remaches, biselado y núcleo de energía incandescente. */
+    /** Placa de casco de nave enemiga: metal oscuro, paneles, ventanas, franja de color y motor rojo. */
     fun makeTile(col: Int, seed: Int): Bitmap {
         val t = 96
         val px = IntArray(t * t)
-        val r0 = Color.red(col) * 0.72f + 170f * 0.28f
-        val g0 = Color.green(col) * 0.72f + 170f * 0.28f
-        val b0 = Color.blue(col) * 0.72f + 170f * 0.28f
         val sd = seed.toFloat()
-        val rivets = arrayOf(floatArrayOf(14f, 14f), floatArrayOf(81f, 14f), floatArrayOf(14f, 81f), floatArrayOf(81f, 81f))
+        val cr = Color.red(col).toFloat(); val cg = Color.green(col).toFloat(); val cb = Color.blue(col).toFloat()
+        val wins = arrayOf(
+            intArrayOf(17, 24), intArrayOf(77, 24), intArrayOf(17, 71), intArrayOf(77, 71),
+            intArrayOf(47, 17), intArrayOf(47, 78)
+        )
+        val lit = BooleanArray(wins.size) { Noise.n3(it * 1.7f, sd, 0.5f) > 0.38f }
         for (y in 0 until t) for (x in 0 until t) {
             val u = x / (t - 1f)
             val v = y / (t - 1f)
-            val n = Noise.fbm(x * 0.03f, y * 0.35f, sd, 3)
-            val grain = Noise.fbm(x * 0.5f, y * 0.5f, sd + 9f, 2)
-            var lum = (1.15f - 0.6f * ((u + v) / 2f)) * (0.78f + 0.35f * n) * (0.92f + 0.16f * grain)
+            val n = Noise.fbm(x * 0.04f, y * 0.4f, sd, 3)
+            val grain = Noise.fbm(x * 0.6f, y * 0.6f, sd + 9f, 2)
+            // casco gris azulado con iluminación diagonal
+            var lum = (1.2f - 0.65f * ((u + v) / 2f)) * (0.75f + 0.4f * n) * (0.9f + 0.2f * grain)
+            val panel = (x / 32) + (y / 32) * 3
+            lum *= 0.9f + 0.2f * Noise.n3(panel.toFloat(), sd, 2.2f)
+            var r = 66f * lum; var g = 74f * lum; var b = 90f * lum
+            // costuras de paneles
+            val sx = x % 32; val sy = y % 32
+            if ((sx < 2 || sy < 2) && x > 5 && y > 5 && x < t - 6 && y < t - 6) { r *= 0.45f; g *= 0.45f; b *= 0.5f }
             val d = min(min(x, y), min(t - 1 - x, t - 1 - y))
-            if (d < 5) lum *= if (d == x || d == y) 1.4f else 0.55f
-            else if (d in 8..9) lum *= 0.55f
-            for (rv in rivets) {
-                val dx = x - rv[0]; val dy = y - rv[1]
-                val dist = sqrt(dx * dx + dy * dy)
-                if (dist < 4.5f) lum *= if (dx + dy < 0f) 1.6f else 0.6f
-                else if (dist < 5.6f) lum *= 0.45f
+            // biselado
+            if (d < 3) { val f = if (d == x || d == y) 1.5f else 0.5f; r *= f; g *= f; b *= f }
+            // franja de color de la facción
+            else if (d in 4..7) {
+                val k = if (d == 5 || d == 6) 1f else 0.55f
+                r = cr * 0.85f * k + r * (1f - k) * 0.3f
+                g = cg * 0.85f * k + g * (1f - k) * 0.3f
+                b = cb * 0.85f * k + b * (1f - k) * 0.3f
             }
-            var r = r0 * lum; var g = g0 * lum; var b = b0 * lum
+            // ventanas
+            for (i in wins.indices) {
+                val dx = x - wins[i][0]; val dy = y - wins[i][1]
+                if (abs(dx) <= 3 && abs(dy) <= 2) {
+                    if (lit[i]) { r = 255f; g = 230f; b = 150f } else { r *= 0.35f; g *= 0.35f; b *= 0.4f }
+                }
+            }
+            // domo del motor
             val cdx = x - 47.5f; val cdy = y - 47.5f
             val cd = sqrt(cdx * cdx + cdy * cdy)
-            if (cd < 21f) {
-                val k = (1f - cd / 19f).coerceIn(0f, 1f)
-                val kk = k.pow(1.3f) * 0.96f
-                val er = Color.red(col) + (255 - Color.red(col)) * 0.65f
-                val eg = Color.green(col) + (255 - Color.green(col)) * 0.65f
-                val eb = Color.blue(col) + (255 - Color.blue(col)) * 0.65f
-                val white = smooth(9f, 0f, cd)
-                r = r + (er - r) * kk + 255f * white * 0.5f
-                g = g + (eg - g) * kk + 255f * white * 0.5f
-                b = b + (eb - b) * kk + 255f * white * 0.5f
-                if (cd > 18f) { r *= 0.5f; g *= 0.5f; b *= 0.5f }
+            if (cd < 22f) {
+                if (cd > 18.5f) { r *= 0.35f; g *= 0.35f; b *= 0.4f }
+                else {
+                    val k = (1f - cd / 18.5f).coerceIn(0f, 1f).pow(1.2f)
+                    r = 70f + 185f * k
+                    g = 14f + 90f * k * k
+                    b = 14f + 30f * k * k * k
+                    val hl = smooth(7f, 0f, sqrt((x - 41f) * (x - 41f) + (y - 41f) * (y - 41f)))
+                    r += 120f * hl; g += 120f * hl; b += 110f * hl
+                }
             }
             px[y * t + x] = Color.rgb(cl(r), cl(g), cl(b))
         }
@@ -114,44 +130,89 @@ object Textures {
         return bmp
     }
 
-    /** Planeta volcánico: terreno fBm 3D proyectado en esfera, grietas de lava, bruma, iluminación y atmósfera. */
+    /** Polvo estelar: manchas muy suaves de azul/violeta con poco alfa. */
+    fun makeHaze(w: Int, h: Int): Bitmap {
+        val px = IntArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            val n = Noise.fbm(x * 0.035f, y * 0.035f, 4.2f, 5)
+            val m = Noise.fbm(x * 0.05f + 30f, y * 0.05f, 9f, 3)
+            val a = smooth(0.38f, 0.78f, n) * 70f
+            val r = 90f + 90f * m
+            val g = 110f + 40f * m
+            val b = 230f - 40f * m
+            px[y * w + x] = Color.argb(cl(a), cl(r), cl(g), cl(b))
+        }
+        return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+    }
+
+    /**
+     * Planeta tipo Tierra visto desde el espacio: océanos, continentes, casquetes polares, nubes,
+     * luces de ciudades en la noche, brillo especular, terminador y resplandor atmosférico en el borde.
+     */
     fun makePlanet(radius: Int): Bitmap {
         val d = radius * 2
         val px = IntArray(d * d)
-        var lx = -0.55f; var ly = -0.5f; var lz = 0.67f
+        var lx = -0.62f; var ly = -0.38f; var lz = 0.68f
         val ll = sqrt(lx * lx + ly * ly + lz * lz)
         lx /= ll; ly /= ll; lz /= ll
+        // vector medio para el brillo especular (vista = +z)
+        var hx = lx; var hy = ly; var hz = lz + 1f
+        val hl = sqrt(hx * hx + hy * hy + hz * hz)
+        hx /= hl; hy /= hl; hz /= hl
         for (y in 0 until d) for (x in 0 until d) {
             val nx = (x + 0.5f - radius) / radius
             val ny = (y + 0.5f - radius) / radius
             val rr = nx * nx + ny * ny
-            if (rr >= 1.04f) continue
-            val edge = if (rr <= 1f) 1f else (1.04f - rr) / 0.04f
+            if (rr >= 1.03f) continue
+            val edge = if (rr <= 1f) 1f else (1.03f - rr) / 0.03f
             val nz = sqrt(max(0f, 1f - rr))
-            val qx = nx
-            val qy = ny * 0.94f + nz * 0.34f
-            val qz = nz * 0.94f - ny * 0.34f
-            val sx = qx * 2.2f + 3.1f; val sy = qy * 2.2f + 1.7f; val sz = qz * 2.2f + 5.3f
-            val hgt = Noise.fbm(sx, sy, sz, 6)
-            val ridge = 1f - abs(2f * Noise.fbm(sx * 2.1f + 7f, sy * 2.1f, sz * 2.1f, 4) - 1f)
-            val haze = Noise.fbm(sx * 1.3f + 20f, sy * 3f, sz * 1.3f, 4)
+            // inclinación del eje (~23°)
+            val qx = nx * 0.92f + ny * 0.39f * 0.0f
+            val qy = ny * 0.92f + nz * 0.39f
+            val qz = nz * 0.92f - ny * 0.39f
+            val sx = qx * 1.7f + 3.1f; val sy = qy * 1.7f + 1.7f; val sz = qz * 1.7f + 5.3f
+            val c = Noise.fbm(sx, sy, sz, 6)
+            val moist = Noise.fbm(sx * 2f + 11f, sy * 2f, sz * 2f, 4)
+            val lat = abs(qy)
+            val land = smooth(0.50f, 0.535f, c)
             var r: Float; var g: Float; var b: Float
-            if (hgt < 0.47f) {
-                val k = hgt / 0.47f
-                r = 34f + 50f * k; g = 16f + 26f * k; b = 14f + 20f * k
-            } else {
-                val k = ((hgt - 0.47f) / 0.4f).coerceIn(0f, 1f)
-                r = 150f + 95f * k; g = 64f + 100f * k; b = 30f + 60f * k
-            }
-            val hz = smooth(0.55f, 0.75f, haze) * 0.45f
-            r += (230f - r) * hz; g += (190f - g) * hz; b += (150f - b) * hz
-            val diff = max(0f, nx * lx + ny * ly + nz * lz)
-            val lit = (0.10f + diff.pow(0.8f)) * (0.85f + 0.3f * hgt)
-            r *= lit; g *= lit; b *= lit
-            val lava = smooth(0.90f, 0.985f, ridge) * (if (hgt < 0.52f) 1f else 0.25f)
-            r += 255f * lava; g += 110f * lava; b += 20f * lava
-            val rim = (1f - nz).pow(3f) * 0.5f * (0.3f + diff)
-            r += 255f * rim; g += 130f * rim; b += 70f * rim
+            // océano: de somero a profundo
+            val depth = smooth(0.30f, 0.52f, c)
+            val or = 4f + 24f * depth; val og = 22f + 78f * depth; val ob = 62f + 90f * depth
+            // tierra: verde, seco, montaña
+            val e = ((c - 0.535f) / 0.25f).coerceIn(0f, 1f)
+            var lr: Float; var lg: Float; var lb: Float
+            if (moist < 0.45f && lat < 0.62f) { lr = 176f; lg = 148f; lb = 96f }
+            else { lr = 44f; lg = 92f; lb = 40f }
+            lr += (125f - lr) * e * 0.8f; lg += (118f - lg) * e * 0.8f; lb += (108f - lb) * e * 0.8f
+            r = or + (lr - or) * land; g = og + (lg - og) * land; b = ob + (lb - ob) * land
+            // hielo polar
+            val ice = smooth(0.80f, 0.90f, lat + (Noise.fbm(sx * 3f, sy * 3f, sz * 3f, 3) - 0.5f) * 0.18f)
+            r += (238f - r) * ice; g += (243f - g) * ice; b += (252f - b) * ice
+            val oceanMask = (1f - land) * (1f - ice)
+            // nubes
+            val cn = Noise.fbm(sx * 1.5f + 40f, sy * 2.4f, sz * 1.5f + 7f, 5)
+            val cloud = smooth(0.50f, 0.72f, cn) * 0.88f
+            // iluminación
+            val dot = nx * lx + ny * ly + nz * lz
+            val day = smooth(-0.10f, 0.40f, dot)
+            val shadeV = 0.03f + 0.97f * day
+            val dr = (r * (1f - cloud) + 245f * cloud) * shadeV
+            val dg = (g * (1f - cloud) + 247f * cloud) * shadeV
+            val db = (b * (1f - cloud) + 250f * cloud) * shadeV
+            r = dr; g = dg; b = db
+            // luces de ciudades en la noche, solo sobre tierra sin nubes densas
+            val cities = smooth(0.60f, 0.72f, Noise.fbm(sx * 9f, sy * 9f, sz * 9f, 3)) * land * (1f - ice) * (1f - cloud) * (1f - day)
+            r += 255f * cities * 0.95f; g += 190f * cities * 0.95f; b += 100f * cities * 0.95f
+            // brillo especular en el mar
+            val sp = max(0f, nx * hx + ny * hy + nz * hz).pow(80f) * oceanMask * (1f - cloud) * 0.85f
+            r += 255f * sp; g += 255f * sp; b += 240f * sp
+            // oscurecimiento en el limbo y resplandor atmosférico (Fresnel)
+            val limb = 0.55f + 0.45f * sqrt(nz)
+            r *= limb; g *= limb; b *= limb
+            val fres = (1f - nz).pow(2.6f)
+            val atm = fres * (0.18f + 0.82f * day)
+            r += 70f * atm * 1.4f; g += 140f * atm * 1.4f; b += 255f * atm * 1.4f
             px[y * d + x] = Color.argb(cl(255f * edge), cl(r), cl(g), cl(b))
         }
         return Bitmap.createBitmap(px, d, d, Bitmap.Config.ARGB_8888)
