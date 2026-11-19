@@ -4,6 +4,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
@@ -20,6 +22,7 @@ import android.view.WindowInsets
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -37,13 +40,14 @@ class GameView(ctx: Context) : View(ctx) {
 
     /** Trocito de hierro que vuela desde una nave hasta la barra. */
     private class Chip(
-        val x0: Float, val y0: Float, var delay: Float, val dur: Float, val amount: Int, val side: Float
+        val x0: Float, val y0: Float, val delay: Float, val dur: Float, val amount: Int, val side: Float
     ) { var t = 0f }
 
     private companion object {
-        const val COLS = 19
+        const val COLS = 23
         const val LIFT_LOCKED = 0.30f
         const val LIFT_PIECE = 0.55f
+        const val EXPLOSION_TIME = 2.8f
         // color de facción de cada tipo de nave
         val BASE = intArrayOf(
             Color.rgb(0, 229, 255), Color.rgb(255, 196, 0), Color.rgb(176, 64, 255),
@@ -60,23 +64,36 @@ class GameView(ctx: Context) : View(ctx) {
     private var ccx = 0f
     private var ccy = 0f
     private var planetR = 0f
-    private var planetSc = 1f
+    private var planetSc = 1.5f
     private var topInset = 0
 
-    private var tiles: Array<Bitmap>? = null
+    // fases: 0 = menú en paz, 1 = explosión, 2 = partida
+    private var phase = 0
+    private var phaseT = 0f
+
+    @Volatile private var ships: Array<Bitmap>? = null
+    @Volatile private var planetData: PlanetData? = null
+    private var loading = false
     private var glows: Array<Bitmap>? = null
+    private var glowFire: Bitmap? = null
+    private var glowWhite: Bitmap? = null
     private var haze: Bitmap? = null
-    @Volatile private var planet: Bitmap? = null
-    private var planetBuiltFor = 0
     private var bgShader: Shader? = null
     private var nebA: Shader? = null
     private var nebB: Shader? = null
     private var atmoShader: Shader? = null
+    private val edgeShaders = arrayOfNulls<Shader>(4)
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val hazePaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val addPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD) }
+    private val dark1 = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setScale(0.30f, 0.30f, 0.36f, 1f) })
+    }
+    private val dark2 = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setScale(0.55f, 0.55f, 0.62f, 1f) })
+    }
     private val path = Path()
     private val rect = RectF()
     private val sparks = ArrayList<Spark>()
@@ -85,6 +102,9 @@ class GameView(ctx: Context) : View(ctx) {
     private var last = 0L
     private var time = 0f
     private var shake = 0f
+    private var starSpeed = 0.12f
+    private var alert = 0f
+    private var flashWhite = 0f
 
     private val prefs = ctx.getSharedPreferences("abismo", Context.MODE_PRIVATE)
     private var totalIngots = try { prefs.getInt("ingots", 0) } catch (e: Exception) { 0 }
@@ -95,6 +115,8 @@ class GameView(ctx: Context) : View(ctx) {
     private var seenBars = 0
     private var dispFrac = 0f
     private var barFlash = 0f
+    private var chipTx = 0f
+    private var chipTy = 0f
 
     // geometría del HUD
     private var barX0 = 0f
@@ -103,6 +125,7 @@ class GameView(ctx: Context) : View(ctx) {
     private var barY1 = 0f
     private val pauseRect = RectF()
     private val resumeRect = RectF()
+    private val escapeRect = RectF()
     private var paused = false
 
     // entrada
@@ -110,13 +133,11 @@ class GameView(ctx: Context) : View(ctx) {
     private var sy = 0f
     private var lx = 0f
     private var ly = 0f
-    private var accX = 0f
-    private var accY = 0f
     private var t0 = 0L
     private var moved = false
     private var downOnPause = false
 
-    fun pause() { paused = true }
+    fun pause() { if (phase == 2) paused = true }
 
     @Suppress("DEPRECATION")
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
@@ -146,16 +167,20 @@ class GameView(ctx: Context) : View(ctx) {
         val botPad = u * 0.9f
         var rows = ((h - topPad - botPad) / s).toInt()
         if (rows % 2 == 0) rows--
-        game = Game(COLS, rows)
+        val g = Game(COLS, rows)
+        g.baseSpeed = w * 0.105f / s
+        game = g
         ox = 0f
         oy = topPad + (h - topPad - botPad - rows * s) / 2f
         ccx = ox + (COLS / 2 + 0.5f) * s
         ccy = oy + (rows / 2 + 0.5f) * s
         planetR = w * 0.27f
-        planetSc = 1f
+        planetSc = 1.5f
+        phase = 0; phaseT = 0f
         seenIngots = 0; seenBars = 0; dispFrac = 0f
         newRecord = false; overHandled = false
         paused = false
+        alert = 0f; flashWhite = 0f
         chips.clear()
 
         val top = topInset + u * 0.95f
@@ -165,6 +190,7 @@ class GameView(ctx: Context) : View(ctx) {
         barY1 = barY0 + u * 0.42f
         pauseRect.set(w / 2f - u * 0.7f, top - u * 0.75f, w / 2f + u * 0.7f, top + u * 0.3f)
         resumeRect.set(w / 2f - u * 3f, h / 2f + u * 0.2f, w / 2f + u * 3f, h / 2f + u * 1.6f)
+        escapeRect.set(w / 2f - u * 3.6f, h * 0.80f, w / 2f + u * 3.6f, h * 0.80f + u * 1.6f)
 
         bgShader = LinearGradient(
             0f, 0f, 0f, h.toFloat(),
@@ -175,51 +201,55 @@ class GameView(ctx: Context) : View(ctx) {
             intArrayOf(Color.argb(60, 90, 30, 160), Color.argb(0, 0, 0, 0)), null, Shader.TileMode.CLAMP)
         nebB = RadialGradient(w * 0.85f, h * 0.8f, w * 0.9f,
             intArrayOf(Color.argb(50, 20, 90, 170), Color.argb(0, 0, 0, 0)), null, Shader.TileMode.CLAMP)
-        // atmósfera: resplandor azul justo en el borde del planeta que se difumina hacia afuera
         atmoShader = RadialGradient(ccx, ccy, planetR * 1.5f,
             intArrayOf(Color.argb(0, 90, 160, 255), Color.argb(0, 90, 160, 255), Color.argb(200, 110, 175, 255),
                 Color.argb(70, 70, 130, 255), Color.argb(0, 40, 90, 255)),
             floatArrayOf(0f, 0.655f, 0.68f, 0.8f, 1f), Shader.TileMode.CLAMP)
+        // bordes de alerta (franjas estrechas rojas)
+        val th = u * 1.1f
+        val red = Color.argb(255, 255, 30, 40)
+        val none = Color.argb(0, 255, 30, 40)
+        edgeShaders[0] = LinearGradient(0f, 0f, 0f, th, red, none, Shader.TileMode.CLAMP)
+        edgeShaders[1] = LinearGradient(0f, h.toFloat(), 0f, h - th, red, none, Shader.TileMode.CLAMP)
+        edgeShaders[2] = LinearGradient(0f, 0f, th, 0f, red, none, Shader.TileMode.CLAMP)
+        edgeShaders[3] = LinearGradient(w.toFloat(), 0f, w - th, 0f, red, none, Shader.TileMode.CLAMP)
 
-        if (tiles == null) {
-            tiles = Array(7) { Textures.makeTile(BASE[it], it * 17 + 3) }
+        if (glows == null) {
             glows = Array(7) { Textures.makeGlow(BASE[it]) }
+            glowFire = Textures.makeGlow(Color.rgb(255, 150, 50))
+            glowWhite = Textures.makeGlow(Color.rgb(255, 240, 210))
         }
         if (haze == null) {
             val hw = 120
             val hh = (hw * h / w.toFloat()).toInt()
             haze = Textures.makeHaze(hw, hh)
         }
-        val pr = (planetR * 0.7f).toInt()
-        if (planetBuiltFor != pr) {
-            planetBuiltFor = pr
+        if (!loading) {
+            loading = true
+            val pr = (planetR * 0.7f).toInt()
             Thread {
-                val b = Textures.makePlanet(pr)
-                planet = b
+                ships = Textures.makeShipTiles(BASE)
+                planetData = Textures.makePlanet(pr)
                 postInvalidate()
             }.start()
         }
 
         stars.clear()
         val maxD = hypot(w.toFloat(), h.toFloat()) / 2f
-        repeat(110) {
+        repeat(120) {
             stars.add(Star(Random.nextFloat() * 6.2832f, planetR + Random.nextFloat() * (maxD - planetR), 0.2f + Random.nextFloat() * 0.8f))
         }
         sparks.clear()
         last = 0L
     }
 
+    private fun ready() = ships != null && planetData != null
+
     // ---------- color ----------
     private fun lighten(c: Int, f: Float) = Color.rgb(
         (Color.red(c) + (255 - Color.red(c)) * f).toInt(),
         (Color.green(c) + (255 - Color.green(c)) * f).toInt(),
         (Color.blue(c) + (255 - Color.blue(c)) * f).toInt()
-    )
-
-    private fun shade(c: Int, f: Float) = Color.rgb(
-        (Color.red(c) * f).toInt().coerceIn(0, 255),
-        (Color.green(c) * f).toInt().coerceIn(0, 255),
-        (Color.blue(c) * f).toInt().coerceIn(0, 255)
     )
 
     // ---------- ciclo ----------
@@ -229,35 +259,92 @@ class GameView(ctx: Context) : View(ctx) {
         val dt = if (last == 0L || paused) 0f else min(0.05f, (now - last) / 1e9f)
         last = now
         time += dt
-        if (!paused) {
+
+        if (phase == 1) {
+            phaseT += dt
+            if (phaseT >= EXPLOSION_TIME) { phase = 2; phaseT = 0f }
+        } else phaseT += dt
+
+        val near = g.nearestFilled()
+        if (phase == 2 && !paused) {
             g.update(dt)
             consumeBursts(g)
             consumeIron(g)
             emitThrust(g)
-            updateParticles(dt, g)
             updateBar(g, dt)
             if (g.over && !overHandled) finishGame(g)
         }
-        val near = g.nearestFilled()
-        val target = 1f + 0.22f * (1f - ((near - 1) / 8f)).coerceIn(0f, 1f)
-        planetSc += (target - planetSc) * min(1f, dt * 2f)
+        updateParticles(dt, g)
+
+        // cámara del planeta (perspectiva): lejos de la amenaza se achica, cerca crece
+        val target = when (phase) {
+            0 -> 1.5f + 0.02f * sin(time * 0.6f)
+            1 -> 1f + 0.5f * (1f - (phaseT / EXPLOSION_TIME).coerceIn(0f, 1f))
+            else -> 1f + 0.22f * (1f - ((near - 1) / 8f)).coerceIn(0f, 1f)
+        }
+        planetSc += (target - planetSc) * min(1f, dt * 2.5f)
+
+        // estrellas: rápidas y se calman a medida que las naves se acercan al centro
+        val starTarget = when (phase) {
+            0 -> 0.12f
+            1 -> 0.12f + 0.88f * (phaseT / EXPLOSION_TIME).coerceIn(0f, 1f)
+            else -> ((near - 1) / 8f).coerceIn(0.10f, 1f)
+        }
+        starSpeed += (starTarget - starSpeed) * min(1f, dt * 2f)
+
+        // alerta roja en los bordes
+        val alertT = if (phase != 2 || g.over) 0f else when {
+            near <= 2 -> 1f
+            near == 3 -> 0.7f
+            near == 4 -> 0.4f
+            else -> 0f
+        }
+        alert += (alertT - alert) * min(1f, dt * 3f)
         shake = max(0f, shake - dt * 2.5f)
+        flashWhite = max(0f, flashWhite - dt * 1.6f)
 
         canvas.save()
-        if (shake > 0f) canvas.translate((Random.nextFloat() - 0.5f) * shake * s * 0.3f, (Random.nextFloat() - 0.5f) * shake * s * 0.3f)
+        if (shake > 0f) canvas.translate((Random.nextFloat() - 0.5f) * shake * s * 0.35f, (Random.nextFloat() - 0.5f) * shake * s * 0.35f)
         drawSpace(canvas)
         drawPlanet(canvas)
         drawHaze(canvas)
-        drawDanger(canvas, near)
-        drawShadow(canvas, g)
-        drawLocked(canvas, g)
-        drawPiece(canvas, g)
+        if (phase == 2) {
+            drawDanger(canvas, near)
+            drawShadow(canvas, g)
+            drawLocked(canvas, g)
+            drawPiece(canvas, g)
+        }
         drawSparks(canvas)
         canvas.restore()
-        drawChips(canvas)
-        drawHud(canvas, g)
+        if (alert > 0.01f) drawAlert(canvas)
+        if (phase == 2) {
+            drawChips(canvas)
+            drawHud(canvas, g)
+        } else drawMenu(canvas)
+        if (flashWhite > 0f) {
+            paint.style = Paint.Style.FILL
+            paint.shader = null
+            paint.color = Color.argb((235 * min(1f, flashWhite)).toInt(), 255, 245, 225)
+            canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        }
         if (paused) drawPause(canvas)
         postInvalidateOnAnimation()
+    }
+
+    private fun startEscape() {
+        val pd = planetData ?: return
+        if (ships == null) return
+        phase = 1; phaseT = 0f
+        shake = 1.4f
+        flashWhite = 1.1f
+        val ex = ccx + pd.cities[0] * planetR * planetSc
+        val ey = ccy + pd.cities[1] * planetR * planetSc
+        repeat(90) {
+            val a = Random.nextFloat() * 6.283f
+            val v = s * (3f + Random.nextFloat() * 13f)
+            val col = when (Random.nextInt(3)) { 0 -> Color.rgb(255, 230, 160); 1 -> Color.rgb(255, 150, 50); else -> Color.rgb(255, 80, 40) }
+            sparks.add(Spark(ex, ey, cos(a) * v, sin(a) * v, 1.5f, 1.5f, col, s * (0.12f + Random.nextFloat() * 0.2f)))
+        }
     }
 
     private fun finishGame(g: Game) {
@@ -315,13 +402,11 @@ class GameView(ctx: Context) : View(ctx) {
     private fun emitThrust(g: Game) {
         val p = g.piece ?: return
         for (c in p.cells) {
-            val x = p.px + c[0]; val y = p.py + c[1]
-            val bx = x - g.gx; val by = y - g.gy
             var covered = false
-            for (o in p.cells) if (p.px + o[0] == bx && p.py + o[1] == by) covered = true
-            if (covered || Random.nextFloat() > 0.55f) continue
-            val cxp = ox + (x + g.visX + 0.5f) * s - g.gx * s * 0.5f
-            val cyp = oy + (y + g.visY + 0.5f) * s - g.gy * s * 0.5f
+            for (o in p.cells) if (o[0] == c[0] - g.gx && o[1] == c[1] - g.gy) covered = true
+            if (covered || Random.nextFloat() > 0.5f) continue
+            val cxp = ox + (p.fx + c[0] + 0.5f) * s - g.gx * s * 0.5f
+            val cyp = oy + (p.fy + c[1] + 0.5f) * s - g.gy * s * 0.5f
             val col = if (Random.nextBoolean()) Color.rgb(255, 170, 60) else Color.rgb(255, 90, 40)
             sparks.add(Spark(cxp + (Random.nextFloat() - 0.5f) * s * 0.4f, cyp + (Random.nextFloat() - 0.5f) * s * 0.4f,
                 -g.gx * s * (2.5f + Random.nextFloat() * 2f) + (Random.nextFloat() - 0.5f) * s,
@@ -340,14 +425,13 @@ class GameView(ctx: Context) : View(ctx) {
             p.vx *= 0.96f; p.vy *= 0.96f
         }
         val maxD = hypot(width.toFloat(), height.toFloat()) / 2f + 20f
-        // las estrellas se acercan al planeta: nos alejamos de él
+        // las estrellas convergen hacia el planeta: nos alejamos de él
         for (st in stars) {
-            st.dist -= st.dist * (0.10f + 0.28f * st.z) * dt
+            st.dist -= st.dist * (0.45f + 0.9f * st.z) * starSpeed * dt
             if (st.dist < planetR * 0.9f) { st.dist = maxD * (0.75f + Random.nextFloat() * 0.25f); st.ang = Random.nextFloat() * 6.2832f }
         }
-        // hierro en vuelo
-        val tx = barX0 + (barX1 - barX0) * dispFrac.coerceIn(0.03f, 1f)
-        val ty = (barY0 + barY1) / 2f
+        chipTx = barX0 + (barX1 - barX0) * dispFrac.coerceIn(0.03f, 1f)
+        chipTy = (barY0 + barY1) / 2f
         val ci = chips.iterator()
         while (ci.hasNext()) {
             val c = ci.next()
@@ -357,11 +441,7 @@ class GameView(ctx: Context) : View(ctx) {
                 ci.remove()
             }
         }
-        chipTx = tx; chipTy = ty
     }
-
-    private var chipTx = 0f
-    private var chipTy = 0f
 
     // ---------- dibujo ----------
     private fun drawSpace(c: Canvas) {
@@ -374,30 +454,88 @@ class GameView(ctx: Context) : View(ctx) {
         c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
         paint.shader = null
         paint.strokeCap = Paint.Cap.ROUND
-        // estrellas que convergen hacia el planeta; la estela queda del lado de afuera
         for (st in stars) {
             val fade = ((st.dist - planetR) / (s * 3f)).coerceIn(0f, 1f)
-            val len = st.dist * (0.03f + 0.06f * st.z)
+            val speedPx = st.dist * (0.45f + 0.9f * st.z) * starSpeed
+            val len = 2f + speedPx * 0.055f
             val ca = cos(st.ang); val sa = sin(st.ang)
             paint.strokeWidth = 1f + 2f * st.z
-            paint.color = Color.argb((fade * (60f + 190f * st.z)).toInt().coerceIn(0, 255), 200, 215, 255)
+            paint.color = Color.argb((fade * (70f + 185f * st.z)).toInt().coerceIn(0, 255), 200, 215, 255)
             c.drawLine(ccx + ca * st.dist, ccy + sa * st.dist, ccx + ca * (st.dist + len), ccy + sa * (st.dist + len), paint)
         }
     }
 
     private fun drawPlanet(c: Canvas) {
+        val pd = planetData
         c.save()
         c.scale(planetSc, planetSc, ccx, ccy)
         paint.shader = atmoShader
         c.drawRect(ccx - planetR * 1.5f, ccy - planetR * 1.5f, ccx + planetR * 1.5f, ccy + planetR * 1.5f, paint)
         paint.shader = null
-        val pb = planet
-        if (pb != null) {
+        if (pd != null) {
             rect.set(ccx - planetR, ccy - planetR, ccx + planetR, ccy + planetR)
-            c.drawBitmap(pb, null, rect, bmpPaint)
+            c.drawBitmap(pd.bmp, null, rect, bmpPaint)
+            drawDisturbances(c, pd)
         }
         c.restore()
     }
+
+    /** Ciudades con luces, destellos y fuego; en el menú todo está en calma. */
+    private fun drawDisturbances(c: Canvas, pd: PlanetData) {
+        val gf = glowFire ?: return
+        val gw = glowWhite ?: return
+        val n = pd.cities.size / 2
+        val ex = ccx + pd.cities[0] * planetR
+        val ey = ccy + pd.cities[1] * planetR
+        if (phase == 0) return
+        val intensity = if (phase == 1) (phaseT / 1.2f).coerceIn(0f, 1f) else 1f
+        for (i in 1 until n) {
+            val cxp = ccx + pd.cities[i * 2] * planetR
+            val cyp = ccy + pd.cities[i * 2 + 1] * planetR
+            val v = sin(time * (5f + (i % 5)) + i * 3.1f) * sin(time * 2.3f + i * 1.7f)
+            val flash = ((v - 0.55f) / 0.45f).coerceIn(0f, 1f)
+            val base = 0.35f + 0.25f * sin(time * 9f + i * 2f)
+            val rad = planetR * (0.025f + 0.05f * flash)
+            rect.set(cxp - rad, cyp - rad, cxp + rad, cyp + rad)
+            addPaint.alpha = ((60f * base + 255f * flash) * intensity).toInt().coerceIn(0, 255)
+            c.drawBitmap(if (flash > 0.5f) gw else gf, null, rect, addPaint)
+        }
+        // epicentro: ciudad ardiendo
+        val burn = 0.7f + 0.3f * sin(time * 11f)
+        var rad = planetR * 0.13f * (0.6f + 0.4f * intensity)
+        rect.set(ex - rad, ey - rad, ex + rad, ey + rad)
+        addPaint.alpha = (200 * burn * intensity).toInt().coerceIn(0, 255)
+        c.drawBitmap(gf, null, rect, addPaint)
+        rad = planetR * 0.045f
+        rect.set(ex - rad, ey - rad, ex + rad, ey + rad)
+        addPaint.alpha = (255 * burn).toInt().coerceIn(0, 255)
+        c.drawBitmap(gw, null, rect, addPaint)
+        // explosión inicial: fogonazo, onda expansiva y humo
+        if (phase == 1) {
+            val t = phaseT
+            val fl = (1f - t / 1.6f).coerceIn(0f, 1f)
+            if (fl > 0f) {
+                val r1 = planetR * (0.08f + 0.5f * (1f - exp2(-t * 5f)))
+                rect.set(ex - r1, ey - r1, ex + r1, ey + r1)
+                addPaint.alpha = (255 * fl).toInt()
+                c.drawBitmap(gw, null, rect, addPaint)
+                val r2 = r1 * 1.8f
+                rect.set(ex - r2, ey - r2, ex + r2, ey + r2)
+                addPaint.alpha = (190 * fl).toInt()
+                c.drawBitmap(gf, null, rect, addPaint)
+            }
+            val ring = (t / 1.8f).coerceIn(0f, 1f)
+            if (ring < 1f) {
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = planetR * 0.03f * (1f - ring) + 2f
+                paint.color = Color.argb((220 * (1f - ring)).toInt(), 255, 220, 170)
+                c.drawCircle(ex, ey, planetR * 1.1f * ring, paint)
+                paint.style = Paint.Style.FILL
+            }
+        }
+    }
+
+    private fun exp2(x: Float) = Math.exp(x.toDouble()).toFloat()
 
     /** Polvo estelar muy tenue, detrás de las naves para no estorbar. */
     private fun drawHaze(c: Canvas) {
@@ -414,6 +552,22 @@ class GameView(ctx: Context) : View(ctx) {
             hazePaint.alpha = if (i == 0) 110 else 70
             c.drawBitmap(hb, null, rect, hazePaint)
         }
+    }
+
+    /** Pulso rojo estrecho en el contorno de la pantalla, como alarma de la nave. */
+    private fun drawAlert(c: Canvas) {
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val th = u * 1.1f
+        val pulse = 0.35f + 0.65f * (0.5f + 0.5f * sin(time * (6f + 5f * alert)))
+        val a = (230f * alert * pulse).toInt().coerceIn(0, 255)
+        paint.style = Paint.Style.FILL
+        paint.shader = edgeShaders[0]; paint.alpha = a; c.drawRect(0f, 0f, w, th, paint)
+        paint.shader = edgeShaders[1]; paint.alpha = a; c.drawRect(0f, h - th, w, h, paint)
+        paint.shader = edgeShaders[2]; paint.alpha = a; c.drawRect(0f, 0f, th, h, paint)
+        paint.shader = edgeShaders[3]; paint.alpha = a; c.drawRect(w - th, 0f, w, h, paint)
+        paint.shader = null
+        paint.alpha = 255
     }
 
     private fun drawDanger(c: Canvas, near: Int) {
@@ -436,35 +590,58 @@ class GameView(ctx: Context) : View(ctx) {
 
     private fun drawShadow(c: Canvas, g: Game) {
         val p = g.piece ?: return
-        paint.color = Color.argb(110, 0, 0, 0)
+        paint.color = Color.argb(100, 0, 0, 0)
         val o = s * 0.14f
         for (cell in p.cells) {
-            val x = ox + (p.px + cell[0] + g.visX) * s + o
-            val y = oy + (p.py + cell[1] + g.visY) * s + o
-            c.drawRect(x, y, x + s, y + s, paint)
+            val x = ox + (p.fx + cell[0]) * s + o
+            val y = oy + (p.fy + cell[1]) * s + o
+            c.drawRoundRect(x, y, x + s, y + s, s * 0.25f, s * 0.25f, paint)
         }
     }
 
     private fun drawLocked(c: Canvas, g: Game) {
         val n = g.rows * g.cols
-        val xs = IntArray(n); val ys = IntArray(n); val ts = IntArray(n)
+        val xs = IntArray(n); val ys = IntArray(n); val ts = IntArray(n); val ms = IntArray(n)
         var k = 0
         for (y in 0 until g.rows) for (x in 0 until g.cols) {
-            if (g.grid[y][x] != 0) { xs[k] = x; ys[k] = y; ts[k] = g.grid[y][x] - 1; k++ }
+            val v = g.grid[y][x]
+            if (v == 0) continue
+            xs[k] = x; ys[k] = y; ts[k] = v - 1
+            var m = 0
+            if (y > 0 && g.grid[y - 1][x] == v) m = m or 1
+            if (x < g.cols - 1 && g.grid[y][x + 1] == v) m = m or 2
+            if (y < g.rows - 1 && g.grid[y + 1][x] == v) m = m or 4
+            if (x > 0 && g.grid[y][x - 1] == v) m = m or 8
+            ms[k] = m
+            k++
         }
-        val solid = { x: Int, y: Int -> x in 0 until g.cols && y in 0 until g.rows && g.grid[y][x] != 0 }
-        drawLayer(c, g, xs, ys, ts, k, 0f, 0f, LIFT_LOCKED, 70, solid)
+        drawShips(c, xs, ys, ts, ms, k, 0f, 0f, LIFT_LOCKED, 70)
     }
 
     private fun drawPiece(c: Canvas, g: Game) {
         val p = g.piece ?: return
-        val xs = IntArray(4) { p.px + p.cells[it][0] }
-        val ys = IntArray(4) { p.py + p.cells[it][1] }
+        val bx = floor(p.fx).toInt()
+        val by = floor(p.fy).toInt()
+        val offX = p.fx - bx
+        val offY = p.fy - by
+        val xs = IntArray(4) { bx + p.cells[it][0] }
+        val ys = IntArray(4) { by + p.cells[it][1] }
         val ts = IntArray(4) { p.type }
-        val solid = { x: Int, y: Int -> (0 until 4).any { xs[it] == x && ys[it] == y } }
+        val ms = IntArray(4) { i ->
+            var m = 0
+            for (j in 0 until 4) {
+                if (xs[j] == xs[i] && ys[j] == ys[i] - 1) m = m or 1
+                if (xs[j] == xs[i] + 1 && ys[j] == ys[i]) m = m or 2
+                if (xs[j] == xs[i] && ys[j] == ys[i] + 1) m = m or 4
+                if (xs[j] == xs[i] - 1 && ys[j] == ys[i]) m = m or 8
+            }
+            m
+        }
         // flecha que indica hacia dónde avanza la nave
-        val mx = xs.average().toFloat() + 0.5f + g.gx * 2.6f
-        val my = ys.average().toFloat() + 0.5f + g.gy * 2.6f
+        var avgx = 0f; var avgy = 0f
+        for (cell in p.cells) { avgx += cell[0]; avgy += cell[1] }
+        val mx = p.fx + avgx / 4f + 0.5f + g.gx * 2.8f
+        val my = p.fy + avgy / 4f + 0.5f + g.gy * 2.8f
         val ax = ox + mx * s
         val ay = oy + my * s
         paint.color = Color.argb(150, 255, 255, 255)
@@ -475,62 +652,45 @@ class GameView(ctx: Context) : View(ctx) {
         path.lineTo(ax - g.gx * a - g.gy * a, ay - g.gy * a - g.gx * a)
         path.close()
         c.drawPath(path, paint)
-        drawLayer(c, g, xs, ys, ts, 4, g.visX, g.visY, LIFT_PIECE, 190, solid)
+        drawShips(c, xs, ys, ts, ms, 4, offX, offY, LIFT_PIECE, 190)
     }
 
     private fun proj(v: Float, center: Float, lift: Float) =
         v + lift * s * ((v - center) / (4f * s)).coerceIn(-1f, 1f)
 
-    /** Dibuja las paredes laterales y luego las tapas texturizadas; el relieve crece hacia afuera. */
-    private fun drawLayer(
-        c: Canvas, g: Game, xs: IntArray, ys: IntArray, ts: IntArray, n: Int,
-        fx: Float, fy: Float, lift: Float, glowA: Int, solid: (Int, Int) -> Boolean
+    /** Tres capas por celda: casco inferior oscuro, capa intermedia y cubierta; el relieve crece hacia afuera. */
+    private fun drawShips(
+        c: Canvas, xs: IntArray, ys: IntArray, ts: IntArray, ms: IntArray, n: Int,
+        offX: Float, offY: Float, lift: Float, glowA: Int
     ) {
-        val tl = tiles ?: return
+        val tl = ships ?: return
         val gl = glows ?: return
-        paint.style = Paint.Style.FILL
-        for (i in 0 until n) {
-            val gx = xs[i]; val gy = ys[i]
-            val x0 = ox + (gx + fx) * s; val x1 = x0 + s
-            val y0 = oy + (gy + fy) * s; val y1 = y0 + s
-            val tx0 = proj(x0, ccx, lift); val tx1 = proj(x1, ccx, lift)
-            val ty0 = proj(y0, ccy, lift); val ty1 = proj(y1, ccy, lift)
-            val col = BASE[ts[i]]
-            if (gx > g.cx && !solid(gx - 1, gy)) quad(c, x0, y0, x0, y1, tx0, ty1, tx0, ty0, shade(col, 0.40f))
-            if (gx < g.cx && !solid(gx + 1, gy)) quad(c, x1, y0, x1, y1, tx1, ty1, tx1, ty0, shade(col, 0.40f))
-            if (gy > g.cy && !solid(gx, gy - 1)) quad(c, x0, y0, x1, y0, tx1, ty0, tx0, ty0, shade(col, 0.58f))
-            if (gy < g.cy && !solid(gx, gy + 1)) quad(c, x0, y1, x1, y1, tx1, ty1, tx0, ty1, shade(col, 0.58f))
+        for (layer in 0..2) {
+            val f = when (layer) { 0 -> 0f; 1 -> lift * 0.5f; else -> lift }
+            val pt = when (layer) { 0 -> dark1; 1 -> dark2; else -> bmpPaint }
+            for (i in 0 until n) {
+                val x0 = ox + (xs[i] + offX) * s
+                val y0 = oy + (ys[i] + offY) * s
+                rect.set(proj(x0, ccx, f), proj(y0, ccy, f), proj(x0 + s, ccx, f), proj(y0 + s, ccy, f))
+                c.drawBitmap(tl[ts[i] * 16 + ms[i]], null, rect, pt)
+            }
         }
         for (i in 0 until n) {
-            val gx = xs[i]; val gy = ys[i]
-            val x0 = ox + (gx + fx) * s; val x1 = x0 + s
-            val y0 = oy + (gy + fy) * s; val y1 = y0 + s
-            val tx0 = proj(x0, ccx, lift); val tx1 = proj(x1, ccx, lift)
-            val ty0 = proj(y0, ccy, lift); val ty1 = proj(y1, ccy, lift)
-            rect.set(tx0, ty0, tx1, ty1)
-            c.drawBitmap(tl[ts[i]], null, rect, bmpPaint)
-            // destello que recorre el casco
-            val sweep = 0.5f + 0.5f * sin(time * 2.2f - (gx + gy) * 0.55f)
-            addPaint.alpha = (glowA * 0.25f * sweep).toInt()
-            c.drawBitmap(gl[ts[i]], null, rect, addPaint)
-            // halo de la franja de facción
-            val pulse = 0.75f + 0.25f * sin(time * 3f + gx * 1.3f + gy * 0.7f)
+            val x0 = ox + (xs[i] + offX) * s
+            val y0 = oy + (ys[i] + offY) * s
+            val tx0 = proj(x0, ccx, lift); val tx1 = proj(x0 + s, ccx, lift)
+            val ty0 = proj(y0, ccy, lift); val ty1 = proj(y0 + s, ccy, lift)
+            val pulse = 0.75f + 0.25f * sin(time * 3f + xs[i] * 1.3f + ys[i] * 0.7f)
             val gcx = (tx0 + tx1) / 2f; val gcy = (ty0 + ty1) / 2f
             val gr = s * 1.3f
             rect.set(gcx - gr, gcy - gr, gcx + gr, gcy + gr)
-            addPaint.alpha = (glowA * 0.45f * pulse).toInt()
+            addPaint.alpha = (glowA * 0.35f * pulse).toInt()
             c.drawBitmap(gl[ts[i]], null, rect, addPaint)
         }
     }
 
-    private fun quad(c: Canvas, ax: Float, ay: Float, bx: Float, by: Float, cx: Float, cy: Float, dx: Float, dy: Float, col: Int) {
-        path.reset()
-        path.moveTo(ax, ay); path.lineTo(bx, by); path.lineTo(cx, cy); path.lineTo(dx, dy); path.close()
-        paint.color = col
-        c.drawPath(path, paint)
-    }
-
     private fun drawSparks(c: Canvas) {
+        paint.style = Paint.Style.FILL
         for (p in sparks) {
             val f = p.life / p.max
             paint.color = Color.argb((255 * f).toInt(), Color.red(p.color), Color.green(p.color), Color.blue(p.color))
@@ -540,6 +700,7 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun drawChips(c: Canvas) {
+        paint.style = Paint.Style.FILL
         for (ch in chips) {
             val p = ch.t - ch.delay
             val sz = u * 0.17f
@@ -581,6 +742,35 @@ class GameView(ctx: Context) : View(ctx) {
         c.drawRect(cx - topW * 0.38f, cy - h * 0.36f, cx + topW * 0.2f, cy - h * 0.2f, paint)
     }
 
+    private fun drawMenu(c: Canvas) {
+        val a = if (phase == 1) (1f - phaseT / 0.7f).coerceIn(0f, 1f) else 1f
+        if (a <= 0f) return
+        paint.style = Paint.Style.FILL
+        paint.typeface = Typeface.DEFAULT_BOLD
+        paint.textAlign = Paint.Align.CENTER
+        paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
+        paint.textSize = u * 1.15f
+        c.drawText("FUGA ORBITAL", width / 2f, topInset + u * 2.4f, paint)
+        paint.textSize = u * 0.42f
+        paint.color = Color.argb((200 * a).toInt(), 190, 215, 255)
+        c.drawText("Un planeta en calma... por ahora", width / 2f, topInset + u * 3.2f, paint)
+        paint.textSize = u * 0.42f
+        paint.color = Color.argb((220 * a).toInt(), 255, 255, 255)
+        c.drawText("Récord: $best      Lingotes: $totalIngots", width / 2f, escapeRect.top - u * 0.7f, paint)
+        val pulse = 0.5f + 0.5f * sin(time * 3f)
+        val ok = ready()
+        paint.color = if (ok) Color.argb((255 * a).toInt(), 200 + (40 * pulse).toInt(), 40, 40) else Color.argb((200 * a).toInt(), 60, 70, 100)
+        c.drawRoundRect(escapeRect, u * 0.5f, u * 0.5f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 3f
+        paint.color = Color.argb((255 * a).toInt(), 255, 170, 150)
+        c.drawRoundRect(escapeRect, u * 0.5f, u * 0.5f, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
+        paint.textSize = u * 0.8f
+        c.drawText(if (ok) "ESCAPAR" else "Cargando...", width / 2f, escapeRect.centerY() + u * 0.28f, paint)
+    }
+
     private fun drawHud(c: Canvas, g: Game) {
         paint.typeface = Typeface.DEFAULT_BOLD
         paint.style = Paint.Style.FILL
@@ -589,7 +779,6 @@ class GameView(ctx: Context) : View(ctx) {
         paint.textAlign = Paint.Align.LEFT
         paint.color = Color.argb(235, 255, 255, 255)
         c.drawText("NIVEL ${g.level}", u * 0.4f, top, paint)
-        // lingotes
         paint.textAlign = Paint.Align.RIGHT
         c.drawText("$totalIngots", width - u * 0.4f, top, paint)
         val tw = paint.measureText("$totalIngots")
@@ -641,9 +830,9 @@ class GameView(ctx: Context) : View(ctx) {
         paint.color = Color.argb(230, 255, 255, 255)
         c.drawText("hierro ${g.barProgress} / ${g.barNeed()}", width / 2f, barY1 - u * 0.1f, paint)
 
-        if (time < 7f && !g.over && !paused) {
+        if (phaseT < 7f && !g.over && !paused) {
             paint.textSize = u * 0.42f
-            paint.color = Color.argb((255 * min(1f, (7f - time))).toInt(), 255, 255, 255)
+            paint.color = Color.argb((255 * min(1f, (7f - phaseT))).toInt(), 255, 255, 255)
             c.drawText("Arrastra: mueve la nave en libertad", width / 2f, height - u * 1.8f, paint)
             c.drawText("Toca: gira   ·   Empuja rápido: la lanzas lejos", width / 2f, height - u * 1.2f, paint)
         }
@@ -661,12 +850,13 @@ class GameView(ctx: Context) : View(ctx) {
             c.drawText(if (newRecord) "¡Nuevo récord! $best" else "Récord: $best", width / 2f, height / 2f + u * 0.5f, paint)
             paint.color = Color.WHITE
             paint.textSize = u * 0.45f
-            c.drawText("Toca para reiniciar", width / 2f, height / 2f + u * 1.7f, paint)
+            c.drawText("Toca para volver", width / 2f, height / 2f + u * 1.7f, paint)
         }
     }
 
     private fun drawPause(c: Canvas) {
         paint.style = Paint.Style.FILL
+        paint.shader = null
         paint.color = Color.argb(248, 4, 6, 16)
         c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
         paint.textAlign = Paint.Align.CENTER
@@ -687,35 +877,26 @@ class GameView(ctx: Context) : View(ctx) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 sx = e.x; sy = e.y; lx = e.x; ly = e.y
-                accX = 0f; accY = 0f
                 t0 = System.currentTimeMillis(); moved = false
-                downOnPause = pauseRect.contains(e.x, e.y)
+                downOnPause = phase == 2 && pauseRect.contains(e.x, e.y)
             }
             MotionEvent.ACTION_MOVE -> {
-                if (paused || downOnPause || g.over) { lx = e.x; ly = e.y; return true }
-                accX += e.x - lx; accY += e.y - ly
+                if (phase != 2 || paused || downOnPause || g.over) { lx = e.x; ly = e.y; return true }
+                // arrastre libre: la nave sigue al dedo en coordenadas continuas
+                g.drag((e.x - lx) / s, (e.y - ly) / s)
                 lx = e.x; ly = e.y
-                val step = s * 0.55f
-                var guard = 0
-                while ((abs(accX) >= step || abs(accY) >= step) && guard++ < 8) {
-                    if (abs(accX) >= step) {
-                        val d = if (accX > 0f) 1 else -1
-                        g.steer(d, 0); accX -= d * step; moved = true
-                    }
-                    if (abs(accY) >= step) {
-                        val d = if (accY > 0f) 1 else -1
-                        g.steer(0, d); accY -= d * step; moved = true
-                    }
-                }
-                accX = accX.coerceIn(-step, step)
-                accY = accY.coerceIn(-step, step)
+                if (hypot(e.x - sx, e.y - sy) > s * 0.4f) moved = true
             }
             MotionEvent.ACTION_UP -> {
                 val dt = System.currentTimeMillis() - t0
                 val tx = e.x - sx
                 val ty = e.y - sy
                 val dist = hypot(tx, ty)
-                if (paused) {
+                if (phase == 0) {
+                    if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y) && ready()) startEscape()
+                } else if (phase == 1) {
+                    // la explosión no se interrumpe
+                } else if (paused) {
                     if (resumeRect.contains(e.x, e.y) || pauseRect.contains(e.x, e.y)) { paused = false; last = 0L }
                 } else if (downOnPause && pauseRect.contains(e.x, e.y)) {
                     paused = true

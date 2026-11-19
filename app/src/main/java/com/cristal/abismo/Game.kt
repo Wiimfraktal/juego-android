@@ -1,9 +1,13 @@
 package com.cristal.abismo
 
+import kotlin.math.abs
+import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.random.Random
 
-/** Cristal: cuatro celdas relativas al pivote (px,py). */
-class Piece(val type: Int, var cells: Array<IntArray>, var px: Int, var py: Int)
+/** Nave: cuatro celdas relativas al pivote, que se mueve en coordenadas continuas (fx, fy). */
+class Piece(val type: Int, var cells: Array<IntArray>, var fx: Float, var fy: Float)
 
 object Shapes {
     val all: Array<Array<IntArray>> = arrayOf(
@@ -18,7 +22,8 @@ object Shapes {
 }
 
 /**
- * Tetris invertido: las piezas nacen en el centro y caen hacia el borde de la pantalla.
+ * Tetris invertido con movimiento libre: las naves nacen en el centro y avanzan hacia el borde.
+ * El jugador las arrastra en coordenadas continuas, pero nunca puede acercarlas al centro.
  * Se pierde si algo se acumula dentro de la zona central.
  */
 class Game(val cols: Int, val rows: Int) {
@@ -29,6 +34,7 @@ class Game(val cols: Int, val rows: Int) {
     var piece: Piece? = null
     var gx = 0
     var gy = 1
+    var baseSpeed = 2.5f   // celdas por segundo al inicio
     var score = 0
     var barProgress = 0
     var barsFilled = 0
@@ -38,20 +44,18 @@ class Game(val cols: Int, val rows: Int) {
     var over = false
     var overTime = 0f
 
-    // desplazamiento visual (en celdas) para animar movimientos
-    var visX = 0f
-    var visY = 0f
-
-    /** Celdas eliminadas recientemente (x, y, color) para efectos. */
+    /** Celdas eliminadas recientemente (x, y, tipo) para efectos. */
     val bursts = ArrayList<IntArray>()
-    var lockedFlash = 0f
 
     /** Hierro soltado (x, y, cantidad); la vista lo anima hasta la barra y luego llama addIron. */
     val ironDrops = ArrayList<IntArray>()
 
-    fun barNeed() = 400 + 200 * barsFilled
+    private var contact = 0f
+    private var nextType = Random.nextInt(Shapes.all.size)
 
-    private fun addScore(p: Int) { score += p }
+    init { spawn() }
+
+    fun barNeed() = 400 + 200 * barsFilled
 
     fun addIron(a: Int) {
         barProgress += a
@@ -62,23 +66,7 @@ class Game(val cols: Int, val rows: Int) {
         }
     }
 
-    private fun ring(x: Int, y: Int) = maxOf(Math.abs(x - cx), Math.abs(y - cy))
-
-    /** La caída siempre es hacia afuera del centro, según el eje dominante. */
-    private fun updateDir() {
-        val p = piece ?: return
-        val dx = p.px - cx
-        val dy = p.py - cy
-        if (Math.abs(dx) > Math.abs(dy)) { gx = if (dx > 0) 1 else -1; gy = 0 }
-        else if (Math.abs(dy) > Math.abs(dx)) { gx = 0; gy = if (dy > 0) 1 else -1 }
-    }
-
-    private var timer = 0f
-    private var nextType = Random.nextInt(Shapes.all.size)
-
-    init { spawn() }
-
-    private fun interval() = maxOf(0.095f, 0.36f - 0.016f * (level - 1))
+    private fun speed() = baseSpeed * min(2.2f, 1f + 0.07f * (level - 1))
 
     private fun spawn() {
         val t = nextType
@@ -86,40 +74,72 @@ class Game(val cols: Int, val rows: Int) {
         val dirs = arrayOf(intArrayOf(0, -1), intArrayOf(0, 1), intArrayOf(-1, 0), intArrayOf(1, 0))
         val d = dirs[Random.nextInt(4)]
         gx = d[0]; gy = d[1]
-        val p = Piece(t, Array(4) { Shapes.all[t][it].copyOf() }, cx, cy)
+        val p = Piece(t, Array(4) { Shapes.all[t][it].copyOf() }, cx.toFloat(), cy.toFloat())
         piece = p
-        visX = 0f; visY = 0f
-        timer = 0f
-        if (collides(p.cells, p.px, p.py)) {
-            over = true
-        }
+        contact = 0f
+        if (hits(p.cells, p.fx, p.fy)) over = true
     }
 
-    private fun collides(cells: Array<IntArray>, px: Int, py: Int): Boolean {
+    private fun occupied(x: Int, y: Int) = x < 0 || y < 0 || x >= cols || y >= rows || grid[y][x] != 0
+
+    /** Colisión continua: el rectángulo de cada celda se compara con las celdas de la rejilla que toca. */
+    private fun hits(cells: Array<IntArray>, fx: Float, fy: Float): Boolean {
+        val e = 0.04f
         for (c in cells) {
-            val x = px + c[0]
-            val y = py + c[1]
-            if (x < 0 || y < 0 || x >= cols || y >= rows) return true
-            if (grid[y][x] != 0) return true
+            val x0 = floor(fx + c[0] + e).toInt()
+            val x1 = floor(fx + c[0] + 1f - e).toInt()
+            val y0 = floor(fy + c[1] + e).toInt()
+            val y1 = floor(fy + c[1] + 1f - e).toInt()
+            for (iy in y0..y1) for (ix in x0..x1) if (occupied(ix, iy)) return true
         }
         return false
     }
 
-    private fun move(dx: Int, dy: Int): Boolean {
-        val p = piece ?: return false
-        if (collides(p.cells, p.px + dx, p.py + dy)) return false
-        p.px += dx; p.py += dy
-        visX -= dx; visY -= dy
+    /** Distancia² de la celda más cercana de la nave al centro. */
+    private fun minDist2(cells: Array<IntArray>, fx: Float, fy: Float): Float {
+        var best = Float.MAX_VALUE
+        for (c in cells) {
+            val dx = fx + c[0] - cx
+            val dy = fy + c[1] - cy
+            val d = dx * dx + dy * dy
+            if (d < best) best = d
+        }
+        return best
+    }
+
+    /** La nave avanza siempre hacia afuera según el eje dominante respecto al centro. */
+    private fun updateDir() {
+        val p = piece ?: return
+        val dx = p.fx - cx
+        val dy = p.fy - cy
+        if (abs(dx) > abs(dy) + 0.01f) { gx = if (dx > 0) 1 else -1; gy = 0 }
+        else if (abs(dy) > abs(dx) + 0.01f) { gx = 0; gy = if (dy > 0) 1 else -1 }
+    }
+
+    private fun tryShift(p: Piece, dx: Float, dy: Float): Boolean {
+        if (dx == 0f && dy == 0f) return false
+        val nx = p.fx + dx
+        val ny = p.fy + dy
+        if (nx < -1f || ny < -1f || nx > cols + 1f || ny > rows + 1f) return false
+        if (hits(p.cells, nx, ny)) return false
+        if (minDist2(p.cells, nx, ny) < minDist2(p.cells, p.fx, p.fy) - 1e-3f) return false
+        p.fx = nx; p.fy = ny
         updateDir()
         return true
     }
 
-    /** Movimiento libre del jugador, pero nunca hacia el centro: solo mantiene o aumenta la distancia. */
-    fun steer(dx: Int, dy: Int) {
+    /** Arrastre libre en celdas (puede ser fraccionario). Nunca acerca la nave al centro. */
+    fun drag(dx: Float, dy: Float) {
         val p = piece ?: return
         if (over) return
-        if (ring(p.px + dx, p.py + dy) < ring(p.px, p.py)) return
-        move(dx, dy)
+        val n = max(1, Math.ceil((max(abs(dx), abs(dy)) / 0.2f).toDouble()).toInt())
+        val sx = dx / n
+        val sy = dy / n
+        for (i in 0 until n) {
+            if (!tryShift(p, sx, sy)) {
+                if (!tryShift(p, sx, 0f)) tryShift(p, 0f, sy)
+            }
+        }
     }
 
     fun rotate() {
@@ -127,56 +147,96 @@ class Game(val cols: Int, val rows: Int) {
         if (over || p.type == 1) return
         val rot = Array(4) { intArrayOf(-p.cells[it][1], p.cells[it][0]) }
         val kicks = arrayOf(
-            intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(-1, 0),
-            intArrayOf(0, 1), intArrayOf(0, -1), intArrayOf(2, 0), intArrayOf(-2, 0)
+            floatArrayOf(0f, 0f), floatArrayOf(0.5f, 0f), floatArrayOf(-0.5f, 0f),
+            floatArrayOf(0f, 0.5f), floatArrayOf(0f, -0.5f), floatArrayOf(1f, 0f), floatArrayOf(-1f, 0f),
+            floatArrayOf(0f, 1f), floatArrayOf(0f, -1f)
         )
+        val cur = minDist2(p.cells, p.fx, p.fy)
         for (k in kicks) {
-            if (ring(p.px + k[0], p.py + k[1]) < ring(p.px, p.py)) continue
-            if (!collides(rot, p.px + k[0], p.py + k[1])) {
+            val nx = p.fx + k[0]
+            val ny = p.fy + k[1]
+            if (minDist2(rot, nx, ny) < cur - 1e-3f) continue
+            if (!hits(rot, nx, ny)) {
                 p.cells = rot
-                p.px += k[0]; p.py += k[1]
+                p.fx = nx; p.fy = ny
+                updateDir()
                 return
             }
         }
     }
 
+    private fun tryFall(p: Piece, step: Float): Boolean {
+        val nx = p.fx + gx * step
+        val ny = p.fy + gy * step
+        if (!hits(p.cells, nx, ny)) { p.fx = nx; p.fy = ny; updateDir(); return true }
+        // avanza lo posible hasta el contacto
+        var t = 0f
+        while (t + 0.02f <= step && !hits(p.cells, p.fx + gx * 0.02f, p.fy + gy * 0.02f)) {
+            p.fx += gx * 0.02f; p.fy += gy * 0.02f; t += 0.02f
+        }
+        return false
+    }
+
     fun hardDrop() {
-        if (over || piece == null) return
-        while (move(gx, gy)) { /* sigue hasta chocar */ }
+        val p = piece ?: return
+        if (over) return
+        while (tryFall(p, 0.25f)) { /* sigue hasta chocar */ }
         lock()
     }
 
     fun update(dt: Float) {
-        if (lockedFlash > 0f) lockedFlash -= dt
-        val decay = Math.exp((-dt * 16f).toDouble()).toFloat()
-        visX *= decay; visY *= decay
         if (over) { overTime += dt; return }
-        timer += dt
-        while (timer >= interval() && !over) {
-            timer -= interval()
-            if (!move(gx, gy)) { lock(); break }
+        val p = piece ?: return
+        var rem = speed() * dt
+        var blocked = false
+        while (rem > 1e-4f) {
+            val step = min(rem, 0.2f)
+            rem -= step
+            if (!tryFall(p, step)) { blocked = true; break }
         }
+        if (blocked) {
+            contact += dt
+            if (contact > 0.18f) lock()
+        } else contact = 0f
+    }
+
+    /** Ajusta la nave a la rejilla más cercana libre. */
+    private fun snap(p: Piece): Boolean {
+        val bx = Math.round(p.fx)
+        val by = Math.round(p.fy)
+        var bestX = 0; var bestY = 0; var bestD = Float.MAX_VALUE; var found = false
+        for (oy in -1..1) for (ox in -1..1) {
+            val x = bx + ox
+            val y = by + oy
+            if (hits(p.cells, x.toFloat(), y.toFloat())) continue
+            val d = (x - p.fx) * (x - p.fx) + (y - p.fy) * (y - p.fy)
+            if (d < bestD) { bestD = d; bestX = x; bestY = y; found = true }
+        }
+        if (found) { p.fx = bestX.toFloat(); p.fy = bestY.toFloat() }
+        return found
     }
 
     private fun lock() {
         val p = piece ?: return
+        if (!snap(p)) { over = true; return }
         var danger = false
+        val ix = p.fx.toInt()
+        val iy = p.fy.toInt()
         for (c in p.cells) {
-            val x = p.px + c[0]
-            val y = p.py + c[1]
+            val x = ix + c[0]
+            val y = iy + c[1]
             grid[y][x] = p.type + 1
             ironDrops.add(intArrayOf(x, y, 10))
-            if (Math.abs(x - cx) <= 1 && Math.abs(y - cy) <= 1) danger = true
+            if (abs(x - cx) <= 1 && abs(y - cy) <= 1) danger = true
         }
         piece = null
-        lockedFlash = 0.15f
         val n = clearLines()
         if (n > 0) {
             lines += n
             level = 1 + lines / 6
-            addScore(intArrayOf(0, 100, 300, 500, 800, 1000)[minOf(n, 5)] * level)
+            score += intArrayOf(0, 100, 300, 500, 800, 1000)[min(n, 5)] * level
         }
-        addScore(10)
+        score += 10
         if (danger && n == 0) { over = true; return }
         spawn()
     }
@@ -214,7 +274,7 @@ class Game(val cols: Int, val rows: Int) {
         var best = 99
         for (y in 0 until rows) for (x in 0 until cols) {
             if (grid[y][x] != 0) {
-                val d = maxOf(Math.abs(x - cx), Math.abs(y - cy))
+                val d = max(abs(x - cx), abs(y - cy))
                 if (d < best) best = d
             }
         }
