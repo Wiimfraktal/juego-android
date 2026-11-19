@@ -89,6 +89,9 @@ class GameView(ctx: Context) : View(ctx) {
     private val thumbs = arrayOfNulls<Bitmap>(skins.size)
     private val skinLoading = BooleanArray(skins.size)
     private var loading = false
+    @Volatile private var loaded = false
+    @Volatile private var progress = 0f
+    private var dispProgress = 0f
     private var glows: Array<Bitmap>? = null
     private var sprWhite: Bitmap? = null
     private var sprFire: Bitmap? = null
@@ -212,7 +215,7 @@ class GameView(ctx: Context) : View(ctx) {
         planetR = w * 0.27f
         planetSc = MENU_SC
         confirmExit = false
-        phase = 0; phaseT = 0f; tab = 0
+        phase = if (loaded) 0 else -1; phaseT = 0f; tab = 0
         preview = skinSel
         seenIngots = 0; seenBars = 0; dispFrac = 0f
         newRecord = false; overHandled = false
@@ -310,28 +313,36 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
-    /** Genera (o carga del disco) el planeta equipado, las naves, rocas, lunas y miniaturas en segundo plano. */
+    /** Prepara todo antes del menú (disco si ya existe, si no se genera) y reporta el avance. */
     private fun startLoading() {
         if (loading) return
         loading = true
-        skinLoading[skinSel] = true
+        for (i in skins.indices) skinLoading[i] = true
         val pr = (planetR * 1.3f).toInt()
         val thumbR = (u * 1.3f).toInt()
         val dir = context.cacheDir
         Thread {
-            val first = DiskCache.loadPlanet(dir, skinSel, pr)
-                ?: Textures.makePlanet(pr, skins[skinSel]).also { DiskCache.savePlanet(dir, skinSel, pr, it) }
-            cache[skinSel] = first
-            postInvalidate()
+            // pesos del avance: planeta equipado 3, naves 3, rocas y lunas 1, otras skins 1.5 c/u
+            val total = 3f + 3f + 1f + 1.5f * (skins.size - 1)
+            var done = 0f
+            fun step(w: Float) { done += w; progress = min(1f, done / total) }
+            fun skin(i: Int, w: Float) {
+                val pd = DiskCache.loadPlanet(dir, i, pr)
+                    ?: Textures.makePlanet(pr, skins[i]).also { DiskCache.savePlanet(dir, i, pr, it) }
+                cache[i] = pd
+                thumbs[i] = Bitmap.createScaledBitmap(pd.bmp, thumbR * 2, thumbR * 2, true)
+                step(w)
+            }
+            skin(skinSel, 3f)
             ships = DiskCache.loadShips(dir, BASE.size * 16)
                 ?: Textures.makeShipTiles(BASE).also { DiskCache.saveShips(dir, it) }
-            postInvalidate()
+            step(3f)
             rocks = Array(5) { Textures.makeRock(96, it * 7 + 1) }
             moons = Array(3) { Textures.makeMoon(96, it + 1, MOON_TINTS[it]) }
-            for (i in skins.indices) {
-                thumbs[i] = DiskCache.loadThumb(dir, i, thumbR)
-                    ?: Textures.makePlanet(thumbR, skins[i]).bmp.also { DiskCache.saveThumb(dir, i, thumbR, it) }
-            }
+            step(1f)
+            for (i in skins.indices) if (i != skinSel) skin(i, 1.5f)
+            progress = 1f
+            loaded = true
             postInvalidate()
         }.start()
     }
@@ -358,6 +369,8 @@ class GameView(ctx: Context) : View(ctx) {
         last = now
         time += dt
         msgT = max(0f, msgT - dt)
+        if (phase == -1 && loaded) { phase = 0; phaseT = 0f }
+        dispProgress += (progress - dispProgress) * min(1f, dt * 6f)
 
         if (phase == 1) {
             phaseT += dt
@@ -410,7 +423,7 @@ class GameView(ctx: Context) : View(ctx) {
         canvas.save()
         if (shake > 0f) canvas.translate((Random.nextFloat() - 0.5f) * shake * s * 0.35f, (Random.nextFloat() - 0.5f) * shake * s * 0.35f)
         drawSpace(canvas)
-        drawPlanet(canvas, g)
+        if (phase >= 0) drawPlanet(canvas, g)
         drawHaze(canvas)
         if (phase == 2) {
             drawDanger(canvas, near)
@@ -424,7 +437,8 @@ class GameView(ctx: Context) : View(ctx) {
         if (phase == 2) {
             drawChips(canvas)
             drawHud(canvas, g)
-        } else drawMenu(canvas)
+        } else if (phase == -1) drawLoading(canvas)
+        else drawMenu(canvas)
         if (flashWhite > 0f) {
             paint.style = Paint.Style.FILL
             paint.shader = null
@@ -1000,6 +1014,40 @@ class GameView(ctx: Context) : View(ctx) {
         c.drawRoundRect(cx - topW * 0.38f, cy - h * 0.36f, cx + topW * 0.2f, cy - h * 0.2f, h * 0.08f, h * 0.08f, paint)
     }
 
+    private fun drawLoading(c: Canvas) {
+        paint.style = Paint.Style.FILL
+        paint.typeface = Typeface.DEFAULT_BOLD
+        paint.textAlign = Paint.Align.CENTER
+        paint.color = Color.WHITE
+        paint.textSize = u * 1.15f
+        c.drawText("FUGA ORBITAL", width / 2f, height * 0.38f, paint)
+        val x0 = u * 2.5f
+        val x1 = width - u * 2.5f
+        val y0 = height * 0.50f
+        rect.set(x0, y0, x1, y0 + u * 0.4f)
+        paint.color = Color.argb(150, 10, 12, 30)
+        c.drawRoundRect(rect, u * 0.2f, u * 0.2f, paint)
+        val fw = (x1 - x0) * dispProgress.coerceIn(0f, 1f)
+        if (fw > u * 0.2f) {
+            rect.set(x0, y0, x0 + fw, y0 + u * 0.4f)
+            paint.shader = LinearGradient(x0, 0f, x1, 0f, Color.rgb(60, 140, 255), Color.rgb(0, 229, 255), Shader.TileMode.CLAMP)
+            c.drawRoundRect(rect, u * 0.2f, u * 0.2f, paint)
+            paint.shader = null
+        }
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2f
+        paint.color = Color.argb(140, 170, 200, 255)
+        rect.set(x0, y0, x1, y0 + u * 0.4f)
+        c.drawRoundRect(rect, u * 0.2f, u * 0.2f, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(230, 255, 255, 255)
+        paint.textSize = u * 0.42f
+        c.drawText("Preparando texturas... ${(dispProgress * 100).toInt()}%", width / 2f, y0 + u * 1.3f, paint)
+        paint.textSize = u * 0.32f
+        paint.color = Color.argb(170, 190, 215, 255)
+        c.drawText("La primera vez tarda más; después será casi instantáneo", width / 2f, y0 + u * 2.0f, paint)
+    }
+
     // ---------- menú ----------
     private fun drawMenu(c: Canvas) {
         val a = if (phase == 1) (1f - phaseT / 0.7f).coerceIn(0f, 1f) else 1f
@@ -1273,6 +1321,7 @@ class GameView(ctx: Context) : View(ctx) {
     // ---------- entrada ----------
     override fun onTouchEvent(e: MotionEvent): Boolean {
         val g = game ?: return true
+        if (phase < 0) return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 sx = e.x; sy = e.y; lx = e.x; ly = e.y
