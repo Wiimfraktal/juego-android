@@ -11,8 +11,9 @@ android {
         applicationId = "com.cristal.abismo"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        val build = (project.findProperty("appVersionCode") as String?)?.toIntOrNull() ?: 1
+        versionCode = build
+        versionName = "0.$build"
     }
 
     signingConfigs {

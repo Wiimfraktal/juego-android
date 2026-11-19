@@ -22,15 +22,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Compilar APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon -PappVersionCode=${{ github.run_number }}
 
       - name: Publicar en Releases (tag latest)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VER: 0.${{ github.run_number }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk abismo-de-cristal.apk
+          cp app/build/outputs/apk/debug/app-debug.apk "fuga-orbital-v${VER}.apk"
           gh release delete latest --cleanup-tag -y || true
-          gh release create latest abismo-de-cristal.apk \
+          gh release create latest "fuga-orbital-v${VER}.apk" \
             --target "$GITHUB_SHA" \
-            --title "Abismo de Cristal (última versión)" \
-            --notes "APK listo para instalar. Commit: $GITHUB_SHA"
+            --title "Fuga Orbital v${VER}" \
+            --notes "Versión ${VER}. APK listo para instalar. Commit: $GITHUB_SHA"
