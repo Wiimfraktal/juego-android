@@ -41,26 +41,56 @@ def adsr(n, a, r, hold_level=1.0):
     return env
 
 
-def voice(freq, dur, formants, a=1.2, r=1.8, ens=3, depth=0.004, nh=28, tilt=1.0):
-    """Voz coral: armónicos moldeados por formantes, vibrato y varias voces desafinadas."""
+def formant_weights(freqs, formants):
+    w = np.full(len(freqs), 0.04)
+    for (fc, bw, g) in formants:
+        w += g * np.exp(-((freqs - fc) / bw) ** 2)
+    return w
+
+
+def voice(freq, dur, formants, a=1.2, r=1.8, ens=6, depth=0.004, nh=34, tilt=1.0, vowel2=None):
+    """Coro masculino: varias gargantas distintas (formantes y afinación propias), aliento y paso de una vocal a otra."""
     n = int(dur * SR)
+    t = np.arange(n) / SR
     out = np.zeros(n)
+    morph = None
+    if vowel2 is not None:
+        morph = np.clip((t - dur * 0.25) / (dur * 0.5), 0, 1)
+    ks = np.arange(1, nh + 1)
     for e in range(ens):
-        det = 2 ** ((RNG.uniform(-9, 9)) / 1200.0)
-        f = vibrato(n, freq * det, rate=RNG.uniform(4.8, 5.6), depth=depth, delay=RNG.uniform(0.2, 0.7))
+        det = 2 ** ((RNG.uniform(-12, 12)) / 1200.0)
+        # la afinación flota despacio como en un coro real
+        drift = np.cumsum(RNG.normal(0, 1, n)) / np.sqrt(n) * 0.0016
+        drift = np.convolve(drift, np.ones(400) / 400, mode="same")
+        f = vibrato(n, freq * det, rate=RNG.uniform(4.6, 5.7), depth=depth * RNG.uniform(0.7, 1.3),
+                    delay=RNG.uniform(0.2, 0.9)) * (1 + drift)
         ph = phase_of(f)
+        scale = RNG.uniform(0.94, 1.07)  # largo del tracto vocal de cada cantante
+        fk = freq * ks
+        valid = fk < 7500
+        w1 = formant_weights(fk / scale, formants)
+        w2 = formant_weights(fk / scale, vowel2) if vowel2 is not None else None
         sig = np.zeros(n)
-        for k in range(1, nh + 1):
-            fk = freq * k
-            if fk > 7500:
+        tr = 1.0 + 0.04 * np.sin(2 * np.pi * RNG.uniform(3.8, 4.6) * t + RNG.uniform(0, 6.28))
+        for k in ks:
+            if not valid[k - 1]:
                 break
             amp = 1.0 / k ** tilt
-            w = 0.04
-            for (fc, bw, g) in formants:
-                w += g * np.exp(-((fk - fc) / bw) ** 2)
-            sig += amp * w * np.sin(k * ph + 0.3 * k)
-        out += sig
+            if morph is None:
+                w = w1[k - 1]
+            else:
+                w = w1[k - 1] * (1 - morph) + w2[k - 1] * morph
+            sig += amp * w * np.sin(k * ph + 0.37 * k)
+        out += sig * tr
     out /= ens
+    # aliento: ruido moldeado por los formantes
+    noise = RNG.normal(0, 1, n)
+    spec = np.fft.rfft(noise)
+    fr = np.fft.rfftfreq(n, 1 / SR)
+    spec *= formant_weights(fr, formants)
+    breath = np.fft.irfft(spec, n)
+    breath /= max(1e-9, np.max(np.abs(breath)))
+    out = out / max(1e-9, np.max(np.abs(out))) + 0.035 * breath
     return out * adsr(n, a, r)
 
 
@@ -69,7 +99,7 @@ AH = [(700, 160, 1.0), (1150, 200, 0.6), (2600, 300, 0.12)]
 EH = [(520, 140, 1.0), (1750, 200, 0.5), (2500, 300, 0.12)]
 
 
-def strings(freq, dur, a=0.5, r=0.9, fc=1800.0, nh=24, ens=2, depth=0.003):
+def strings(freq, dur, a=0.5, r=0.9, fc=1500.0, nh=24, ens=3, depth=0.003):
     n = int(dur * SR)
     out = np.zeros(n)
     for e in range(ens):
@@ -184,7 +214,7 @@ def save(stereo, out_dir, name):
         w.setsampwidth(2)
         w.setframerate(SR)
         w.writeframes(pcm.tobytes())
-    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-c:a", "libopus", "-b:a", "88k",
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav, "-c:a", "libopus", "-b:a", "112k",
                     "-ar", "48000", f"{out_dir}/{name}.ogg"], check=True)
 
 
@@ -205,7 +235,9 @@ def menu_theme():
         dur = 8 * beat + 2.5
         for j, nt in enumerate(chord_notes(root, third)):
             vow = [OH, AH, OH, EH][j % 4]
-            m.add(t0, voice(midi(nt), dur, vow, a=1.6, r=2.2), 0.20, pan=-0.6 + 0.4 * j)
+            m.add(t0, voice(midi(nt - 12), dur, vow, a=1.8, r=2.4, vowel2=AH if j % 2 == 0 else OH), 0.22, pan=-0.6 + 0.4 * j)
+            if j in (0, 1):
+                m.add(t0 + 0.05, voice(midi(nt), dur, vow, a=1.8, r=2.4, vowel2=EH), 0.12, pan=0.3 - 0.4 * j)
         # violonchelo largo
         m.add(t0, strings(midi(root + 12), 4 * beat + 0.8, a=0.9, r=1.2, fc=1200), 0.33, pan=-0.2)
         m.add(t0 + 4 * beat, strings(midi(root + 19), 4 * beat + 0.8, a=0.9, r=1.2, fc=1200), 0.30, pan=0.2)
@@ -220,17 +252,8 @@ def menu_theme():
            (74, 48, 2), (77, 50, 2), (81, 52, 2), (79, 54, 2),
            (71, 56, 2), (68, 58, 2), (76, 60, 4)]
     for nt, b, d in mel:
-        m.add(b * beat, voice(midi(nt), d * beat + 0.9, AH, a=0.35, r=0.9, ens=2, depth=0.006), 0.17, pan=0.1)
-    # campanas y arpegios suaves
-    for ci, (root, third) in enumerate(chords):
-        if ci < 2:
-            continue
-        t0 = ci * 8 * beat
-        tones = [root + 24, root + third + 24, root + 31, root + 36]
-        for k in range(8):
-            nt = tones[[0, 1, 2, 3, 2, 1, 2, 3][k]]
-            m.add(t0 + k * beat, bell(midi(nt), 3.0), 0.045, pan=-0.5 + 0.14 * k)
-    return m.finish(wet=0.42, rt60=4.0)
+        m.add(b * beat, voice(midi(nt - 12), d * beat + 1.1, AH, a=0.5, r=1.1, ens=4, depth=0.006, vowel2=OH), 0.22, pan=0.1)
+    return m.finish(wet=0.50, rt60=5.6)
 
 
 # ------------------------------------------------------------------ partida: tenso y épico
@@ -281,8 +304,31 @@ def game_theme():
     return m.finish(wet=0.30, rt60=2.6)
 
 
+def place_sfx():
+    """Golpe sordo y metálico muy leve cuando una nave se acopla."""
+    n = int(0.32 * SR)
+    t = np.arange(n) / SR
+    thump = np.sin(phase_of(70 + 90 * np.exp(-t * 40))) * np.exp(-t * 16)
+    click = RNG.normal(0, 1, n)
+    click = np.convolve(click, np.ones(5) / 5, mode="same") * np.exp(-t * 130)
+    ring = (np.sin(2 * np.pi * 820 * t) * 0.5 + np.sin(2 * np.pi * 1330 * t) * 0.3) * np.exp(-t * 24)
+    x = thump * 0.9 + click * 0.25 + ring * 0.12
+    x *= np.minimum(1.0, t * 900)
+    return np.tanh(x * 1.2) * 0.8
+
+
+def save_wav_mono(sig, out_dir, name):
+    pcm = (np.clip(sig, -1, 1) * 32767).astype("<i2")
+    with wave.open(f"{out_dir}/{name}.wav", "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SR)
+        w.writeframes(pcm.tobytes())
+
+
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "."
     save(menu_theme(), out, "menu_theme")
     save(game_theme(), out, "game_theme")
+    save_wav_mono(place_sfx(), out, "place")
     print("ok")

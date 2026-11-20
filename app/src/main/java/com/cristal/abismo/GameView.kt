@@ -124,7 +124,12 @@ class GameView(ctx: Context) : View(ctx) {
     private val chips = ArrayList<Chip>()
     private var last = 0L
     private var lastMusic = System.nanoTime()
-    private val musicRect = RectF()
+    private val gearC = RectF()
+    private val panelRect = RectF()
+    private val musicSw = RectF()
+    private val sfxSw = RectF()
+    private val closeRect = RectF()
+    private var settingsOpen = false
     private var time = 0f
     private var shake = 0f
     private var starSpeed = 0.12f
@@ -132,6 +137,8 @@ class GameView(ctx: Context) : View(ctx) {
     private var flashWhite = 0f
 
     private val prefs = ctx.getSharedPreferences("abismo", Context.MODE_PRIVATE)
+    private val sfx = Sfx(ctx).also { it.enabled = try { prefs.getBoolean("sfx", true) } catch (e: Exception) { true } }
+    private var seenLocks = 0
     private val music = MusicPlayer(ctx).also { it.enabled = try { prefs.getBoolean("music", true) } catch (e: Exception) { true } }
     private var totalIngots = try { prefs.getInt("ingots", 0) } catch (e: Exception) { 0 }
     private var best = try { prefs.getInt("best", 0) } catch (e: Exception) { 0 }
@@ -182,7 +189,7 @@ class GameView(ctx: Context) : View(ctx) {
     fun pause() { if (phase == 2) paused = true }
     fun hostPause() { pause(); music.pause() }
     fun hostResume() { music.resume() }
-    fun hostDestroy() { music.release() }
+    fun hostDestroy() { music.release(); sfx.release() }
 
     @Suppress("DEPRECATION")
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
@@ -224,7 +231,8 @@ class GameView(ctx: Context) : View(ctx) {
         confirmExit = false
         phase = if (loaded) 0 else -1; phaseT = 0f; tab = 0
         preview = skinSel
-        seenIngots = 0; seenBars = 0; dispFrac = 0f
+        seenIngots = 0; seenBars = 0; dispFrac = 0f; seenLocks = 0
+        settingsOpen = false
         newRecord = false; overHandled = false
         paused = false
         alert = 0f; flashWhite = 0f
@@ -238,11 +246,16 @@ class GameView(ctx: Context) : View(ctx) {
         pauseRect.set(w / 2f - u * 0.7f, top - u * 0.75f, w / 2f + u * 0.7f, top + u * 0.3f)
         resumeRect.set(w / 2f - u * 3f, h / 2f + u * 0.2f, w / 2f + u * 3f, h / 2f + u * 1.6f)
         menuRect.set(w / 2f - u * 3.6f, h / 2f + u * 2.0f, w / 2f + u * 3.6f, h / 2f + u * 3.3f)
-        musicRect.set(w / 2f - u * 3f, h * 0.80f - u * 2.7f, w / 2f + u * 3f, h * 0.80f - u * 1.8f)
+        panelRect.set(u * 1.2f, h / 2f - u * 3.2f, w - u * 1.2f, h / 2f + u * 3.6f)
+        musicSw.set(panelRect.left + u * 0.6f, panelRect.top + u * 1.9f, panelRect.right - u * 0.6f, panelRect.top + u * 3.0f)
+        sfxSw.set(panelRect.left + u * 0.6f, panelRect.top + u * 3.3f, panelRect.right - u * 0.6f, panelRect.top + u * 4.4f)
+        closeRect.set(w / 2f - u * 2.2f, panelRect.bottom - u * 1.8f, w / 2f + u * 2.2f, panelRect.bottom - u * 0.6f)
         escapeRect.set(w / 2f - u * 3.6f, h * 0.80f, w / 2f + u * 3.6f, h * 0.80f + u * 1.6f)
         val tb = topInset + u * 0.45f
-        tabRect0.set(u * 0.4f, tb, w / 2f - u * 0.1f, tb + u * 0.95f)
-        tabRect1.set(w / 2f + u * 0.1f, tb, w - u * 0.4f, tb + u * 0.95f)
+        val mid = (u * 0.4f + (w - u * 1.65f)) / 2f
+        tabRect0.set(u * 0.4f, tb, mid - u * 0.1f, tb + u * 0.95f)
+        tabRect1.set(mid + u * 0.1f, tb, w - u * 1.65f, tb + u * 0.95f)
+        gearC.set(w - u * 1.35f, tb, w - u * 0.4f, tb + u * 0.95f)
         cardW = u * 3.4f
         cardH = u * 4.3f
         gap = u * 0.3f
@@ -399,6 +412,7 @@ class GameView(ctx: Context) : View(ctx) {
             g.update(dt)
             consumeBursts(g)
             consumeIron(g)
+            if (g.locks > seenLocks) { seenLocks = g.locks; sfx.place() }
             emitThrust(g)
             updateBar(g, dt)
             if (g.over && !overHandled) finishGame(g)
@@ -1124,6 +1138,77 @@ class GameView(ctx: Context) : View(ctx) {
             c.drawText(if (i == 0) "MENÚ" else "PERSONALIZAR", r.centerX(), r.centerY() + u * 0.14f, paint)
         }
         if (tab == 0) drawPlayTab(c, a) else drawSkinTab(c, a)
+        drawGear(c, a)
+        if (settingsOpen) drawSettings(c)
+    }
+
+    private fun drawGear(c: Canvas, a: Float) {
+        val cx = gearC.centerX()
+        val cy = gearC.centerY()
+        val r = u * 0.42f
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb((150 * a).toInt(), 10, 14, 34)
+        c.drawCircle(cx, cy, u * 0.47f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2f
+        paint.color = Color.argb((120 * a).toInt(), 170, 200, 255)
+        c.drawCircle(cx, cy, u * 0.47f, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb((240 * a).toInt(), 255, 255, 255)
+        for (i in 0 until 8) {
+            c.save()
+            c.rotate(i * 45f, cx, cy)
+            rect.set(cx - r * 0.2f, cy - r * 1.0f, cx + r * 0.2f, cy - r * 0.55f)
+            c.drawRoundRect(rect, r * 0.06f, r * 0.06f, paint)
+            c.restore()
+        }
+        c.drawCircle(cx, cy, r * 0.72f, paint)
+        paint.color = Color.argb((255 * a).toInt(), 20, 26, 54)
+        c.drawCircle(cx, cy, r * 0.3f, paint)
+    }
+
+    private fun drawSwitch(c: Canvas, r: RectF, label: String, on: Boolean) {
+        paint.style = Paint.Style.FILL
+        paint.textAlign = Paint.Align.LEFT
+        paint.color = Color.WHITE
+        paint.textSize = u * 0.5f
+        c.drawText(label, r.left, r.centerY() + u * 0.18f, paint)
+        val sw = RectF(r.right - u * 1.9f, r.centerY() - u * 0.4f, r.right, r.centerY() + u * 0.4f)
+        paint.color = if (on) Color.rgb(50, 160, 100) else Color.rgb(90, 96, 120)
+        c.drawRoundRect(sw, u * 0.4f, u * 0.4f, paint)
+        paint.color = Color.WHITE
+        val kx = if (on) sw.right - u * 0.4f else sw.left + u * 0.4f
+        c.drawCircle(kx, sw.centerY(), u * 0.3f, paint)
+        paint.color = Color.argb(230, 255, 255, 255)
+        paint.textSize = u * 0.3f
+        paint.textAlign = Paint.Align.CENTER
+        c.drawText(if (on) "SÍ" else "NO", if (on) sw.left + u * 0.6f else sw.right - u * 0.6f, sw.centerY() + u * 0.11f, paint)
+    }
+
+    private fun drawSettings(c: Canvas) {
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(190, 0, 0, 10)
+        c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        paint.color = Color.argb(245, 12, 16, 38)
+        c.drawRoundRect(panelRect, u * 0.5f, u * 0.5f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2f
+        paint.color = Color.argb(150, 170, 200, 255)
+        c.drawRoundRect(panelRect, u * 0.5f, u * 0.5f, paint)
+        paint.style = Paint.Style.FILL
+        paint.textAlign = Paint.Align.CENTER
+        paint.color = Color.WHITE
+        paint.textSize = u * 0.8f
+        c.drawText("Configuración", width / 2f, panelRect.top + u * 1.3f, paint)
+        drawSwitch(c, musicSw, "Música", music.enabled)
+        drawSwitch(c, sfxSw, "Efectos de sonido", sfx.enabled)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(255, 40, 60, 110)
+        c.drawRoundRect(closeRect, u * 0.4f, u * 0.4f, paint)
+        paint.color = Color.WHITE
+        paint.textAlign = Paint.Align.CENTER
+        paint.textSize = u * 0.55f
+        c.drawText("Cerrar", closeRect.centerX(), closeRect.centerY() + u * 0.2f, paint)
     }
 
     private fun drawPlayTab(c: Canvas, a: Float) {
@@ -1137,17 +1222,6 @@ class GameView(ctx: Context) : View(ctx) {
         c.drawText("Aleja las naves del centro antes de que lleguen", width / 2f, topInset + u * 3.9f, paint)
         paint.color = Color.argb((220 * a).toInt(), 255, 255, 255)
         c.drawText("Récord: $best      Lingotes: $totalIngots", width / 2f, escapeRect.top - u * 0.7f, paint)
-        paint.style = Paint.Style.FILL
-        paint.color = Color.argb((150 * a).toInt(), 10, 14, 34)
-        c.drawRoundRect(musicRect, u * 0.4f, u * 0.4f, paint)
-        paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 2f
-        paint.color = Color.argb((120 * a).toInt(), 170, 200, 255)
-        c.drawRoundRect(musicRect, u * 0.4f, u * 0.4f, paint)
-        paint.style = Paint.Style.FILL
-        paint.color = Color.argb((235 * a).toInt(), 255, 255, 255)
-        paint.textSize = u * 0.4f
-        c.drawText(if (music.enabled) "Música: activada" else "Música: desactivada", width / 2f, musicRect.centerY() + u * 0.14f, paint)
         val pulse = 0.5f + 0.5f * sin(time * 3f)
         val ok = ready()
         paint.color = if (ok) Color.argb((255 * a).toInt(), 200 + (40 * pulse).toInt(), 40, 40) else Color.argb((200 * a).toInt(), 60, 70, 100)
@@ -1410,14 +1484,20 @@ class GameView(ctx: Context) : View(ctx) {
                 val tx = e.x - sx
                 val ty = e.y - sy
                 val dist = hypot(tx, ty)
-                if (phase == 0) {
+                if (phase == 0 && settingsOpen) {
+                    if (musicSw.contains(e.x, e.y)) {
+                        music.turn(!music.enabled)
+                        try { prefs.edit().putBoolean("music", music.enabled).apply() } catch (ex: Exception) { }
+                    } else if (sfxSw.contains(e.x, e.y)) {
+                        sfx.enabled = !sfx.enabled
+                        try { prefs.edit().putBoolean("sfx", sfx.enabled).apply() } catch (ex: Exception) { }
+                    } else if (closeRect.contains(e.x, e.y) || !panelRect.contains(e.x, e.y)) settingsOpen = false
+                } else if (phase == 0) {
+                    if (gearC.contains(sx, sy) && gearC.contains(e.x, e.y)) { settingsOpen = true; return true }
                     if (tabRect0.contains(sx, sy) && tabRect0.contains(e.x, e.y)) { tab = 0; return true }
                     if (tabRect1.contains(sx, sy) && tabRect1.contains(e.x, e.y)) { tab = 1; preview = skinSel; requestSkin(preview); return true }
                     if (tab == 0) {
-                        if (musicRect.contains(sx, sy) && musicRect.contains(e.x, e.y)) {
-                            music.turn(!music.enabled)
-                            try { prefs.edit().putBoolean("music", music.enabled).apply() } catch (ex: Exception) { }
-                        } else if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
+                        if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
                     } else {
                         if (buyRect.contains(sx, sy) && buyRect.contains(e.x, e.y)) actSkin()
                         else if (!moved && e.y > cardsTop && e.y < cardsTop + cardH) {

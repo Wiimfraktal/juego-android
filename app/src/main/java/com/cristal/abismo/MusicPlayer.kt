@@ -1,7 +1,9 @@
 package com.cristal.abismo
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.media.SoundPool
 
 /** Reproduce las dos pistas en bucle con fundido suave al cambiar de una a otra. */
 class MusicPlayer(private val ctx: Context) {
@@ -89,4 +91,33 @@ class MusicPlayer(private val ctx: Context) {
     private companion object {
         const val LEVEL = 0.55f
     }
+}
+
+/** Efecto de sonido muy leve al fijar una nave. */
+class Sfx(ctx: Context) {
+    var enabled = true
+    private var loaded = false
+    private val pool: SoundPool? = try {
+        SoundPool.Builder()
+            .setMaxStreams(3)
+            .setAudioAttributes(AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            .build()
+    } catch (e: Exception) { null }
+    private var id = 0
+
+    init {
+        try {
+            pool?.setOnLoadCompleteListener { _, _, status -> loaded = status == 0 }
+            id = pool?.load(ctx, R.raw.place, 1) ?: 0
+        } catch (e: Exception) { }
+    }
+
+    fun place() {
+        if (!enabled || !loaded) return
+        try { pool?.play(id, 0.35f, 0.35f, 1, 0, 1f) } catch (e: Exception) { }
+    }
+
+    fun release() { try { pool?.release() } catch (e: Exception) { } }
 }

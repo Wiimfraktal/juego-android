@@ -58,6 +58,8 @@ class Game(val cols: Int, val rows: Int) {
     val ironDrops = ArrayList<IntArray>()
 
     private var contact = 0f
+    /** Naves fijadas hasta ahora (la vista lo usa para el sonido de colocación). */
+    var locks = 0
     private var nextType = Random.nextInt(Shapes.all.size)
 
     init { spawn() }
@@ -224,7 +226,12 @@ class Game(val cols: Int, val rows: Int) {
     fun update(dt: Float) {
         if (over) { overTime += dt; return }
         val p = piece ?: return
-        var rem = speed() * dt
+        // lenta al nacer y cada vez más rápida hacia el borde
+        val axisDist = if (gx != 0) abs(p.fx - cx) else abs(p.fy - cy)
+        val half = if (gx != 0) cols / 2f else rows / 2f
+        val fr = (axisDist / half / 0.55f).coerceIn(0f, 1f)
+        val factor = 0.15f + 0.85f * fr * fr * (3f - 2f * fr)
+        var rem = speed() * factor * dt
         var blocked = false
         while (rem > 1e-4f) {
             val step = min(rem, 0.2f)
@@ -256,6 +263,7 @@ class Game(val cols: Int, val rows: Int) {
     private fun lock() {
         val p = piece ?: return
         if (!snap(p)) { over = true; return }
+        locks++
         var danger = false
         val id = nextId++
         val ix = p.fx.toInt()
