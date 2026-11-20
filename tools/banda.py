@@ -480,81 +480,87 @@ def accordion(freq, dur, att=0.03, rel=0.08):
 
 
 def regio(lib, band):
-    """Norteño / banda a ritmo de polka (2/4 vivo): acordeón, bajo sexto (guitarra de 12 cuerdas modelada),
-    tuba en el "um" y el bajo sexto en el "pa", trompetas y trombones respondiendo. Melodía original."""
+    """Cumbia regia (estilo Monterrey): acordeón al frente, güiro/guacharaca en corcheas, bajo sincopado de cumbia,
+    caja de aro en el contratiempo y metales en los clímax. Tono menor con saltos emotivos. Melodía original."""
     k = band.kit
-    bpm = 118
+    bpm = 94
     beat = 60.0 / bpm
     bar = 4 * beat
-    m = Mix(32 * bar, tail=2.5)
+    m = Mix(32 * bar, tail=3.0)
     n = len(m.L)
-    G, C, D, Em, Am = 43, 36, 38, 40, 45
-    A_ = [(G, MAJ), (G, MAJ), (D, MAJ), (D, MAJ), (D, MAJ), (D, MAJ), (G, MAJ), (G, MAJ)]
-    B_ = [(C, MAJ), (C, MAJ), (G, MAJ), (G, MAJ), (D, MAJ), (D, MAJ), (G, MAJ), (G, MAJ)]
+    Am, Dm, G, C, E, F = 45, 38, 43, 36, 40, 41
+    A_ = [(Am, MIN), (Am, MIN), (Dm, MIN), (G, MAJ), (C, MAJ), (F, MAJ), (E, MAJ), (E, MAJ)]
+    B_ = [(F, MAJ), (G, MAJ), (C, MAJ), (Am, MIN), (Dm, MIN), (E, MAJ), (Am, MIN), (E, MAJ)]
     prog = A_ + A_ + B_ + A_
-    sexto = np.zeros(n)
+    gtr = np.zeros(n); perc = np.zeros(n)
+    scrape_long = mm.shaker(0.16) * 0.8
+    scrape = mm.shaker(0.07)
     for b, (root, q) in enumerate(prog):
         t0 = b * bar
+        sec = b // 8
         nb = root - 12 if root > 40 else root
-        # tuba en 1 y 3, alternando tónica y quinta (el "um")
-        for bt, nn in ((0, nb), (2, nb + 7 if nb + 7 < 45 else nb - 5)):
-            m.add(t0 + bt * beat, lib.tuba.note(nn, beat * 0.7, att=0.02, rel=0.15), 0.55, pan=-0.05)
-            m.add(t0 + bt * beat, band.pizz.note(nn, beat * 0.7, att=0.003, rel=0.15), 0.25)
-        # bajo sexto en 2 y 4 (el "pa"): acorde rasgueado con cuerdas dobladas
-        tri = [root + 12, root + 12 + q, root + 19]
-        tri = [x if x < 64 else x - 12 for x in tri]
-        for bt in (1, 3):
-            for i, nn in enumerate(sorted(tri)):
-                for dbl in (0, 12):
-                    sig = oq._acoustic(nn + dbl - (12 if nn + dbl > 70 else 0), beat * 0.5) * (0.5 if dbl else 0.7)
-                    place(sexto, t0 + bt * beat + i * 0.008 + dbl * 0.0004, sig, 1.0)
-        # batería de banda: bombo en 1 y 3, tarola en 2 y 4, platillo suave
-        m.add(t0, k.get("kick", 0.75), 0.55)
-        m.add(t0 + 2 * beat, k.get("kick", 0.65), 0.5)
-        m.add(t0 + beat, k.get("snare", 0.6), 0.4, pan=0.1)
-        m.add(t0 + 3 * beat, k.get("snare", 0.65), 0.42, pan=0.1)
-        if b % 8 == 0:
-            m.add(t0, k.get("crash", 0.7), 0.35, pan=0.3)
-        for bt in (1, 3):
-            m.add(t0 + bt * beat, k.get("hh", 0.5), 0.2, pan=-0.2)
-    # melodía original: el acordeón la canta con adornos de terceras
-    mel = [(71, 0, .5), (74, .5, .5), (79, 1, 1), (78, 2, .5), (76, 2.5, .5), (74, 3, 1),
-           (71, 4, .5), (74, 4.5, .5), (78, 5, 1), (76, 6, .5), (74, 6.5, .5), (72, 7, 1),
-           (69, 8, .5), (72, 8.5, .5), (78, 9, 1), (76, 10, .5), (74, 10.5, .5), (72, 11, 1),
-           (71, 12, .5), (72, 12.5, .5), (74, 13, .5), (76, 13.5, .5), (78, 14, .5), (76, 14.5, .5), (79, 15, 1),
-           (79, 16, .5), (78, 16.5, .5), (76, 17, .5), (74, 17.5, .5), (76, 18, 1), (72, 19, 1),
-           (71, 20, .5), (72, 20.5, .5), (74, 21, 1), (78, 22, 1), (81, 23, 1),
-           (79, 24, .5), (78, 24.5, .5), (76, 25, .5), (74, 25.5, .5), (72, 26, 1), (78, 27, 1),
-           (79, 28, 2), (74, 30, .5), (78, 30.5, .5), (79, 31, 1)]
-    melB = [(76, 0, 1), (79, 1, .5), (76, 1.5, .5), (72, 2, 1), (76, 3, 1),
-            (74, 4, .5), (76, 4.5, .5), (79, 5, 1), (83, 6, 1.5), (81, 7.5, .5),
-            (81, 8, 1), (78, 9, .5), (76, 9.5, .5), (74, 10, 1), (72, 11, 1),
-            (71, 12, 1), (74, 13, 1), (79, 14, 2),
-            (76, 16, 1), (79, 17, .5), (76, 17.5, .5), (72, 18, 1), (76, 19, 1),
-            (74, 20, .5), (76, 20.5, .5), (79, 21, 1), (83, 22, 1.5), (81, 23.5, .5),
-            (81, 24, .5), (79, 24.5, .5), (78, 25, .5), (76, 25.5, .5), (74, 26, 1), (78, 27, 1),
-            (79, 28, 3)]
+        # bajo de cumbia: 1, "y" del 2, 3 y "y" del 4 (tónica-quinta)
+        for bt, nn, g in ((0, nb, 0.6), (1.5, nb + 7 if nb + 7 < 45 else nb - 5, 0.4), (2, nb, 0.55), (3.5, nb + 7 if nb + 7 < 45 else nb - 5, 0.42)):
+            m.add(t0 + bt * beat, band.pizz.note(nn, beat * 0.55, att=0.003, rel=0.12), g)
+            m.add(t0 + bt * beat, band.ebass.note(nn, beat * 0.5, att=0.003, rel=0.1), g * 0.5)
+        # guacharaca: larga en el tiempo, cortas en las semicorcheas siguientes
+        for x in range(8):
+            place(perc, t0 + x * beat / 2, scrape_long if x % 2 == 0 else scrape, 0.35 if x % 2 == 0 else 0.25)
+        # caja de aro en el contratiempo y bombo suave
+        if sec >= 1 or b >= 4:
+            for bt in (1, 3):
+                m.add(t0 + bt * beat + beat / 2, k.get("side", 0.7), 0.32, pan=0.15)
+            m.add(t0, k.get("kick", 0.55), 0.4)
+            m.add(t0 + 2 * beat, k.get("kick", 0.5), 0.35)
+        # guitarra: acordes rasgueados cortos en el "y" de cada tiempo
+        tri = sorted(x if x < 64 else x - 12 for x in (root + 12, root + 12 + q, root + 19))
+        for bt in (0.5, 1.5, 2.5, 3.5):
+            for i, nn in enumerate(tri):
+                place(gtr, t0 + bt * beat + i * 0.007, oq._acoustic(nn, beat * 0.35), 0.5)
+        # cuerdas de fondo en el estribillo para emoción
+        if sec >= 2:
+            for i, nn in enumerate(triad(root, q)):
+                m.add(t0, lib.vla.note(nn + 24 if nn + 24 < 72 else nn + 12, bar + 0.3, att=0.4, rel=0.8), 0.08, pan=0.35 - 0.15 * i)
+        if b in (8, 16, 24):
+            m.add(t0, k.get("crash", 0.6), 0.3, pan=0.3)
+    # melodía en menor con saltos de sexta y octava al inicio de frase (lo emotivo)
+    mel = [(64, 0, .5), (69, .5, 1), (72, 1.5, .5), (71, 2, .5), (69, 2.5, 1.5),
+           (69, 4, .5), (76, 4.5, 1), (74, 5.5, .5), (72, 6, .5), (71, 6.5, 1.5),
+           (62, 8, .5), (69, 8.5, 1), (72, 9.5, .5), (74, 10, 1), (71, 11, 1),
+           (67, 12, .5), (74, 12.5, 1), (72, 13.5, .5), (71, 14, 1), (67, 15, 1),
+           (64, 16, .5), (72, 16.5, 1), (76, 17.5, .5), (79, 18, 1.5), (76, 19.5, .5),
+           (77, 20, .5), (76, 20.5, .5), (74, 21, .5), (72, 21.5, .5), (69, 22, 2),
+           (68, 24, 1), (71, 25, .5), (74, 25.5, .5), (76, 26, 2),
+           (80, 28, 1), (76, 29, .5), (74, 29.5, .5), (71, 30, 1), (68, 31, 1)]
+    melB = [(72, 0, 1.5), (77, 1.5, .5), (81, 2, 2),
+            (79, 4, 1), (74, 5, .5), (71, 5.5, .5), (74, 6, 2),
+            (76, 8, 1.5), (79, 9.5, .5), (84, 10, 2),
+            (81, 12, 1), (76, 13, .5), (72, 13.5, .5), (69, 14, 2),
+            (74, 16, .5), (77, 16.5, .5), (81, 17, 1), (77, 18, 1), (74, 19, 1),
+            (71, 20, .5), (76, 20.5, 1), (80, 21.5, .5), (83, 22, 2),
+            (81, 24, 1), (76, 25, .5), (72, 25.5, .5), (69, 26, 2),
+            (68, 28, 1), (71, 29, 1), (76, 30, 2)]
     acc = np.zeros(n)
     for base, ml in ((0, mel), (8, mel), (16, melB), (24, mel)):
         for nn, bt, d in ml:
             st = base * bar + bt * beat
-            place(acc, st, accordion(mm.midi(nn), d * beat * 0.92), 1.0)
-            # segunda voz en terceras (estilo norteño)
-            place(acc, st, accordion(mm.midi(nn - (3 if nn % 12 in (11, 4, 9) else 4)), d * beat * 0.92), 0.55)
-    # metales de banda: trompetas y trombones contestan al final de cada frase y doblan en el B
-    for base in (8, 24):
-        for b2 in (3, 7):
-            st = (base + b2) * bar + 2 * beat
-            for i, nn in enumerate((74, 78, 79)):
-                m.add(st + i * beat / 2, lib.tpt.note(nn, beat * 0.45, att=0.01, rel=0.15), 0.3, pan=0.25)
-                m.add(st + i * beat / 2, lib.tbn.note(nn - 12 - 5, beat * 0.45, att=0.01, rel=0.15), 0.28, pan=-0.25)
+            place(acc, st, accordion(mm.midi(nn), d * beat * 0.93, att=0.02), 1.0)
+            if base >= 8:
+                place(acc, st, accordion(mm.midi(nn - (3 if nn % 12 in (0, 5, 7) else 4)), d * beat * 0.93, att=0.02), 0.5)
+    # metales: trompetas y trombón cantan el estribillo y rematan las frases
     for nn, bt, d in melB:
         st = 16 * bar + bt * beat
-        m.add(st, lib.tpt.note(nn, d * beat * 0.9, att=0.01, rel=0.2), 0.22, pan=0.25)
-        m.add(st, lib.tbn.note(nn - 12, d * beat * 0.9, att=0.02, rel=0.2), 0.2, pan=-0.25)
-    m.add(0, acc, 0.42, pan=0.1)
-    m.add(0, oq._body_eq(sexto), 0.3, pan=-0.35)
-    return m.finish(wet=0.18, rt60=1.3, bass=0.2, room=True, sat=0.95)
+        m.add(st, lib.tpt.note(nn, d * beat * 0.9, att=0.02, rel=0.25), 0.2, pan=0.25)
+        m.add(st, lib.tbn.note(nn - 12, d * beat * 0.9, att=0.03, rel=0.25), 0.22, pan=-0.25)
+    for base in (8, 24):
+        st = (base + 7) * bar + 2 * beat
+        for i, nn in enumerate((68, 71, 76)):
+            m.add(st + i * beat / 2, lib.tpt.note(nn, beat * 0.45, att=0.01, rel=0.2), 0.26, pan=0.25)
+            m.add(st + i * beat / 2, lib.tbn.note(nn - 12, beat * 0.45, att=0.01, rel=0.2), 0.24, pan=-0.25)
+    m.add(0, acc, 0.44, pan=0.08)
+    m.add(0, oq._body_eq(gtr), 0.26, pan=-0.4)
+    m.add(0, highpass(perc, 2500), 0.5, pan=0.35)
+    return m.finish(wet=0.2, rt60=1.5, bass=0.22, room=True, sat=0.95)
 
 
 def brighten(st, amt=0.7):

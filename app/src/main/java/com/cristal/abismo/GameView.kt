@@ -2265,6 +2265,7 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun switchTab(n: Int) {
+        achOpen = false
         palPick = -1
         if (n == tab) return
         prevTab = tab
@@ -2407,6 +2408,88 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
+    // ---------- logros cercanos (icono en el menú) ----------
+    private val achIcon = RectF()
+    private var achOpen = false
+    private var achAnim = 0f
+
+    /** Los 3 logros sin desbloquear con mayor avance. */
+    private fun nearAch(): List<Pair<Ach, Float>> = Achievements.all.filter { !stats.unlocked(it.id) }
+        .map { it to (stats.get(it.stat).toFloat() / it.goal).coerceIn(0f, 0.999f) }
+        .sortedByDescending { it.second }.take(3)
+
+    /** Icono de lista con un signo "!" que da un saltito cada pocos segundos; al tocarlo muestra los 3 logros. */
+    private fun drawAchWidget(c: Canvas, a: Float) {
+        val sz = u * 1.05f
+        achIcon.set(u * 0.45f, tabRect0.bottom + u * 0.45f, u * 0.45f + sz, tabRect0.bottom + u * 0.45f + sz)
+        val near = nearAch()
+        achAnim += ((if (achOpen) 1f else 0f) - achAnim) * min(1f, frameDt * 10f)
+        val al = (255 * a).toInt()
+        // leve balanceo lento del icono
+        val sway = sin(time * 1.3f) * 2.2f
+        c.save(); c.rotate(sway, achIcon.centerX(), achIcon.centerY())
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(al * 170 / 255, 10, 14, 34)
+        c.drawRoundRect(achIcon, u * 0.25f, u * 0.25f, paint)
+        paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f
+        paint.color = Color.argb(al * 120 / 255, 170, 200, 255)
+        c.drawRoundRect(achIcon, u * 0.25f, u * 0.25f, paint)
+        // renglones de la lista
+        paint.strokeWidth = u * 0.07f; paint.strokeCap = Paint.Cap.ROUND
+        paint.color = Color.argb(al * 220 / 255, 200, 220, 255)
+        for (i in 0 until 3) {
+            val y = achIcon.top + sz * (0.3f + i * 0.2f)
+            c.drawPoint(achIcon.left + sz * 0.22f, y, paint)
+            c.drawLine(achIcon.left + sz * 0.34f, y, achIcon.left + sz * 0.62f, y, paint)
+        }
+        c.restore()
+        if (near.isNotEmpty()) {
+            // signo de admiración que salta suave cada ~3.5 s
+            val ph = time % 3.5f
+            val hop = if (ph < 0.5f) sin(ph / 0.5f * PI.toFloat()) else 0f
+            val ex = achIcon.right - sz * 0.2f
+            val ey = achIcon.top + sz * 0.5f - hop * sz * 0.18f
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(al, 255, 190, 60)
+            c.drawCircle(ex, ey, sz * 0.2f, paint)
+            paint.color = Color.argb(al, 30, 18, 0)
+            paint.textAlign = Paint.Align.CENTER; paint.typeface = Typeface.DEFAULT_BOLD
+            paint.textSize = sz * 0.3f
+            c.drawText("!", ex, ey + sz * 0.105f, paint)
+        }
+        if (achAnim < 0.02f || near.isEmpty()) return
+        val k = achAnim
+        val pw = u * 9.2f; val rowH = u * 1.15f
+        rect.set(achIcon.left, achIcon.bottom + u * 0.2f, achIcon.left + pw, achIcon.bottom + u * 0.2f + rowH * near.size + u * 0.9f)
+        val pa = (al * k).toInt()
+        c.save(); c.translate(0f, (1f - k) * -u * 0.5f)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(pa * 225 / 255, 8, 12, 28)
+        c.drawRoundRect(rect, u * 0.3f, u * 0.3f, paint)
+        paint.textAlign = Paint.Align.LEFT
+        paint.textSize = u * 0.34f
+        paint.color = Color.argb(pa, 255, 210, 120)
+        c.drawText("Logros más cercanos", rect.left + u * 0.35f, rect.top + u * 0.55f, paint)
+        for ((i, pr) in near.withIndex()) {
+            val (ach, f) = pr
+            val y = rect.top + u * 0.9f + i * rowH
+            paint.color = Color.argb(pa, 255, 255, 255); paint.textSize = u * 0.34f
+            c.drawText(ach.name, rect.left + u * 0.35f, y + u * 0.35f, paint)
+            paint.color = Color.argb(pa * 180 / 255, 190, 210, 240); paint.textSize = u * 0.27f
+            c.drawText(ach.desc, rect.left + u * 0.35f, y + u * 0.7f, paint)
+            val bx0 = rect.right - u * 2.6f; val bx1 = rect.right - u * 0.35f; val by = y + u * 0.2f
+            paint.color = Color.argb(pa * 150 / 255, 40, 50, 80)
+            c.drawRoundRect(bx0, by, bx1, by + u * 0.2f, u * 0.1f, u * 0.1f, paint)
+            paint.color = Color.argb(pa, 90, 170, 255)
+            c.drawRoundRect(bx0, by, bx0 + (bx1 - bx0) * max(0.04f, f), by + u * 0.2f, u * 0.1f, u * 0.1f, paint)
+            paint.textAlign = Paint.Align.RIGHT; paint.textSize = u * 0.25f
+            paint.color = Color.argb(pa * 200 / 255, 220, 230, 255)
+            c.drawText("${min(stats.get(ach.stat), ach.goal)}/${ach.goal}", bx1, by + u * 0.55f, paint)
+            paint.textAlign = Paint.Align.LEFT
+        }
+        c.restore()
+    }
+
     private fun drawLoading(c: Canvas) {
         drawTravel(c, if (approachT >= 0f) 1f - (approachT / APPROACH).coerceIn(0f, 1f) else 1f)
         if (approachT >= 0f) return
@@ -2491,7 +2574,7 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun drawTabContent(c: Canvas, t: Int, a: Float) {
-        when (t) { 0 -> drawPlayTab(c, a); 1 -> drawSkinTab(c, a); else -> drawProfileTab(c, a) }
+        when (t) { 0 -> { drawPlayTab(c, a); drawAchWidget(c, a) }; 1 -> drawSkinTab(c, a); else -> drawProfileTab(c, a) }
     }
 
     private fun drawGear(c: Canvas, a: Float) {
@@ -3555,7 +3638,9 @@ class GameView(ctx: Context) : View(ctx) {
                     if (tabRect1.contains(sx, sy) && tabRect1.contains(e.x, e.y)) { switchTab(1); return true }
                     if (tabRect2.contains(sx, sy) && tabRect2.contains(e.x, e.y)) { switchTab(2); profScroll = 0f; return true }
                     if (tab == 0) {
-                        if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
+                        if (achIcon.contains(sx, sy) && achIcon.contains(e.x, e.y)) achOpen = !achOpen
+                        else if (achOpen) achOpen = false
+                        else if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
                     } else if (tab == 2) {
                         if (!moved && nameRect.contains(e.x, e.y)) editPilotName()
                     } else {
