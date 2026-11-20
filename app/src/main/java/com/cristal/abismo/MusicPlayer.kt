@@ -18,7 +18,7 @@ class MusicPlayer(private val ctx: Context) {
     /** Atenuación global (por ejemplo, durante la pausa). */
     var duck = 1f
 
-    private fun safe(block: () -> Unit) { try { block() } catch (e: Exception) { } }
+    private inline fun safe(block: () -> Unit) { try { block() } catch (e: Exception) { } }
 
     private fun startCurrent() {
         if (track < 0 || !enabled) return
