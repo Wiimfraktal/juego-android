@@ -159,42 +159,76 @@ def snare(dur=0.35):
     return (hp * np.exp(-t * 14) * 0.7 + body * 0.6) * np.minimum(1.0, t * 2000)
 
 
+def _resample_down(y, os):
+    """Re-muestreo por FFT (quita lo que está por encima de Nyquist y diezma)."""
+    L = len(y)
+    Y = np.fft.rfft(y)
+    m = L // os
+    return np.fft.irfft(Y[: m // 2 + 1], m) / os
+
+
 def gtr_note(freq, dur, mute=False, bend=0.0, vib=0.0):
-    """Nota de guitarra limpia (antes del amplificador): púa, caída y opcionalmente bend y vibrato."""
-    n = int(dur * SR)
-    t = np.arange(n) / SR
-    f = np.full(n, freq)
-    if bend:
-        f = f * 2 ** (bend / 12.0 * np.clip((t - 0.03) / 0.12, 0, 1))
-    if vib:
-        f = f * (1 + vib * np.sin(2 * np.pi * 5.6 * t) * np.clip((t - 0.18) / 0.25, 0, 1))
-    ph = phase_of(f)
-    sig = np.zeros(n)
-    for k in range(1, 32):
-        if freq * k > 7000:
-            break
-        sig += np.sin(k * ph + 0.3 * k) / k
-    env = np.exp(-t * (11.0 if mute else 0.9)) * np.minimum(1.0, t * 700)
-    rel = min(n, int(0.03 * SR))
-    env[n - rel:] *= np.linspace(1, 0, rel)
-    return sig * env
+    """Cuerda de guitarra real por Karplus-Strong (bloques vectorizados, sobremuestreo x4),
+    con posición de púa, ruido de ataque, palm mute por amortiguación, bend y vibrato."""
+    os = 4
+    sr = SR * os
+    n = int(dur * sr)
+    N = max(2, int(round(sr / freq)))
+    exc = RNG.uniform(-1, 1, N)
+    k = 3 if not mute else 9
+    exc = np.convolve(exc, np.ones(k) / k, mode="same")
+    pk = max(1, int(N * 0.17))
+    exc = exc - 0.9 * np.roll(exc, pk)
+    y = np.zeros(n + N + 2)
+    y[1:N + 1] = exc
+    rho = 0.9985 if not mute else 0.965
+    i = N + 1
+    while i < len(y):
+        j = min(i + N, len(y))
+        y[i:j] = rho * 0.5 * (y[i - N:j - N] + y[i - N - 1:j - N - 1])
+        i = j
+    y = y[1:n + 1]
+    if mute:  # palma: más opaco
+        y = np.convolve(y, np.ones(6) / 6, mode="same")
+    y = _resample_down(y, os)
+    m = len(y)
+    t = np.arange(m) / SR
+    if bend or vib:
+        rate = np.ones(m)
+        if bend:
+            rate *= 2 ** (bend / 12.0 * np.clip((t - 0.04) / 0.14, 0, 1))
+        if vib:
+            rate *= 1 + vib * np.sin(2 * np.pi * 5.4 * t) * np.clip((t - 0.2) / 0.25, 0, 1)
+        pos = np.cumsum(rate) - rate[0]
+        y = np.interp(pos, np.arange(m), y, right=0.0)
+    y += RNG.normal(0, 1, m) * np.exp(-t * 500) * 0.15  # ataque de púa
+    rel = min(m, int(0.03 * SR))
+    y[m - rel:] *= np.linspace(1, 0, rel)
+    return y / max(1e-9, np.max(np.abs(y)))
 
 
-def amp(x, drive=7.0, cut=4300.0):
-    """Distorsión de válvula + caja de altavoz (paso bajo, realce de medios, sin graves sueltos)."""
-    y = np.tanh(x * drive)
-    size = 1 << int(np.ceil(np.log2(len(y) + 1)))
-    Y = np.fft.rfft(y, size)
+def amp(x, drive=7.0, cut=5000.0):
+    """Amplificador de válvula: ecualización previa, recorte asimétrico en dos etapas y caja de 4x12."""
+    size = 1 << int(np.ceil(np.log2(len(x) + 1)))
     fr = np.fft.rfftfreq(size, 1 / SR)
-    H = 1 / (1 + (fr / cut) ** 4) * (1 + 0.8 * np.exp(-((fr - 1800) / 600) ** 2)) * (fr / 90) ** 2 / (1 + (fr / 90) ** 2)
-    out = np.fft.irfft(Y * H, size)[:len(y)]
+    hp = lambda fc, o=2: (fr / fc) ** o / (1 + (fr / fc) ** o)
+    bump = lambda fc, bw: np.exp(-((fr - fc) / bw) ** 2)
+    X = np.fft.rfft(x, size)
+    pre = np.fft.irfft(X * hp(110) * (1 + 0.9 * bump(850, 450)), size)[:len(x)]
+    pre /= max(1e-9, np.max(np.abs(pre)))
+    g = drive * 2.6
+    y = np.tanh(g * pre + 0.3) - np.tanh(0.3)
+    y = np.tanh(1.6 * y)
+    Y = np.fft.rfft(y, size)
+    cab = 1 / (1 + (fr / cut) ** 6) * (1 + 0.7 * bump(2600, 700)) * (1 - 0.35 * bump(420, 180)) * hp(85, 4)
+    out = np.fft.irfft(Y * cab, size)[:len(x)]
     return out / max(1e-9, np.max(np.abs(out)))
 
 
 def power_chord(buf, start, root, dur, mute):
-    for iv in (0, 7, 12):
+    for si, iv in enumerate((0, 7, 12)):
         sig = gtr_note(midi(root + iv) * 2 ** (RNG.uniform(-4, 4) / 1200), dur, mute)
-        i = int(start * SR)
+        i = int((start + si * 0.006) * SR)
         seg = sig[: max(0, len(buf) - i)]
         buf[i:i + len(seg)] += seg
 

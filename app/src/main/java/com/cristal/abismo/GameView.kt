@@ -215,6 +215,12 @@ class GameView(ctx: Context) : View(ctx) {
     private val menuRect = RectF()
     private var confirmExit = false
     private var gridLines = FloatArray(0)
+    private var lkX = IntArray(0)
+    private var lkY = IntArray(0)
+    private var lkT = IntArray(0)
+    private var lkM = IntArray(0)
+    private var barShader: Shader? = null
+    private var ingotBmp: Bitmap? = null
     private var cardW = 0f
     private var cardH = 0f
     private var cardsTop = 0f
@@ -360,6 +366,9 @@ class GameView(ctx: Context) : View(ctx) {
         for (i in 0..COLS) { gl.add(ox + i * s); gl.add(oy); gl.add(ox + i * s); gl.add(oy + rows * s) }
         for (j in 0..rows) { gl.add(ox); gl.add(oy + j * s); gl.add(ox + COLS * s); gl.add(oy + j * s) }
         gridLines = gl.toFloatArray()
+        barShader = LinearGradient(barX0, 0f, barX1, 0f,
+            intArrayOf(Color.rgb(90, 110, 140), Color.rgb(170, 190, 215), Color.rgb(255, 235, 150)), null, Shader.TileMode.CLAMP)
+        if (ingotBmp == null) ingotBmp = makeIngot()
         stars.clear()
         val maxD = hypot(w.toFloat(), h.toFloat()) / 2f
         repeat(220) {
@@ -410,39 +419,50 @@ class GameView(ctx: Context) : View(ctx) {
         return bmp
     }
 
-    /** Prepara todo antes del menú (disco si ya existe, si no se genera) y reporta el avance. */
+    private fun saveAsync(block: () -> Unit) { Thread { try { block() } catch (e: Exception) { } }.start() }
+
+    /**
+     * Carga solo lo necesario para jugar (planeta equipado, naves de la facción equipada y rocas) y abre el menú.
+     * Después, en segundo plano, prepara miniaturas de superficies y vistas de facciones (guardadas en disco).
+     * El guardado de PNG nunca bloquea la carga.
+     */
     private fun startLoading() {
         if (loading) return
         loading = true
-        for (i in skins.indices) skinLoading[i] = true
+        skinLoading[skinSel] = true
         val pr = (planetR * 1.75f).toInt()
         val thumbR = (u * 1.3f).toInt()
         val dir = context.cacheDir
         Thread {
-            // pesos del avance: planeta equipado 3, naves 3, rocas 1, vistas de naves 1, otras superficies 1.5 c/u
-            val total = 3f + 3f + 1f + 1f + 1.5f * (skins.size - 1)
+            val total = 7f
             var done = 0f
             fun step(w: Float) { done += w; progress = min(1f, done / total) }
-            fun skin(i: Int, w: Float) {
-                val pd = DiskCache.loadPlanet(dir, i, pr)
-                    ?: Textures.makePlanet(pr, skins[i]).also { DiskCache.savePlanet(dir, i, pr, it) }
-                cache[i] = pd
-                thumbs[i] = Bitmap.createScaledBitmap(pd.bmp, thumbR * 2, thumbR * 2, true)
-                step(w)
-            }
-            skin(skinSel, 3f)
-            val f0 = Factions.all[shipSel]
-            ships = DiskCache.loadShips(dir, BASE.size * 16, shipSel)
-                ?: Textures.makeShipTiles(BASE, f0).also { DiskCache.saveShips(dir, it, shipSel) }
+            val sel = skinSel
+            val pd = DiskCache.loadPlanet(dir, sel, pr)
+                ?: Textures.makePlanet(pr, skins[sel]).also { saveAsync { DiskCache.savePlanet(dir, sel, pr, it) } }
+            cache[sel] = pd
+            thumbs[sel] = Bitmap.createScaledBitmap(pd.bmp, thumbR * 2, thumbR * 2, true)
+            step(3f)
+            val fs = shipSel
+            val f0 = Factions.all[fs]
+            ships = DiskCache.loadShips(dir, BASE.size * 16, fs)
+                ?: Textures.makeShipTiles(BASE, f0).also { t -> saveAsync { DiskCache.saveShips(dir, t, fs) } }
             step(3f)
             rocks = Array(5) { Textures.makeRock(96, it * 7 + 1) }
-            step(1f)
-            for (i in Factions.all.indices) shipThumbs[i] = makeShipThumb(i)
-            step(1f)
-            for (i in skins.indices) if (i != skinSel) skin(i, 1.5f)
             progress = 1f
             loaded = true
             postInvalidate()
+            for (i in skins.indices) {
+                if (thumbs[i] != null) continue
+                thumbs[i] = DiskCache.loadThumb(dir, i, thumbR)
+                    ?: Textures.makePlanet(thumbR, skins[i]).bmp.also { b -> saveAsync { DiskCache.saveThumb(dir, i, thumbR, b) } }
+                postInvalidate()
+            }
+            for (i in Factions.all.indices) {
+                shipThumbs[i] = DiskCache.loadNamed(dir, "fthumb_$i.png")
+                    ?: makeShipThumb(i).also { b -> saveAsync { DiskCache.saveNamed(dir, "fthumb_$i.png", b) } }
+                postInvalidate()
+            }
         }.start()
     }
 
@@ -453,7 +473,7 @@ class GameView(ctx: Context) : View(ctx) {
         val dir = context.cacheDir
         Thread {
             cache[i] = DiskCache.loadPlanet(dir, i, pr)
-                ?: Textures.makePlanet(pr, skins[i]).also { DiskCache.savePlanet(dir, i, pr, it) }
+                ?: Textures.makePlanet(pr, skins[i]).also { saveAsync { DiskCache.savePlanet(dir, i, pr, it) } }
             postInvalidate()
         }.start()
     }
@@ -1102,7 +1122,8 @@ class GameView(ctx: Context) : View(ctx) {
 
     private fun drawLocked(c: Canvas, g: Game) {
         val n = g.rows * g.cols
-        val xs = IntArray(n); val ys = IntArray(n); val ts = IntArray(n); val ms = IntArray(n)
+        if (lkX.size < n) { lkX = IntArray(n); lkY = IntArray(n); lkT = IntArray(n); lkM = IntArray(n) }
+        val xs = lkX; val ys = lkY; val ts = lkT; val ms = lkM
         var k = 0
         for (y in 0 until g.rows) for (x in 0 until g.cols) {
             val v = g.grid[y][x]
@@ -1330,23 +1351,37 @@ class GameView(ctx: Context) : View(ctx) {
         if (n == 1) { preview = skinSel; requestSkin(preview) }
     }
 
-    private fun drawIngot(c: Canvas, cx: Float, cy: Float, w: Float) {
+    /** Lingote dibujado una vez en un bitmap (evita crear gradientes en cada fotograma). */
+    private fun makeIngot(): Bitmap {
+        val w = 128f
         val h = w * 0.55f
+        val bmp = Bitmap.createBitmap(w.toInt(), h.toInt() + 2, Bitmap.Config.ARGB_8888)
+        val cv = Canvas(bmp)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        val cx = w / 2f
+        val cy = h / 2f + 1f
         val topW = w * 0.72f
-        path.reset()
-        path.moveTo(cx - topW / 2f, cy - h / 2f)
-        path.lineTo(cx + topW / 2f, cy - h / 2f)
-        path.lineTo(cx + w / 2f, cy + h / 2f)
-        path.lineTo(cx - w / 2f, cy + h / 2f)
-        path.close()
-        paint.style = Paint.Style.FILL
-        paint.shader = LinearGradient(cx, cy - h / 2f, cx, cy + h / 2f,
+        val pth = Path()
+        pth.moveTo(cx - topW / 2f, cy - h / 2f)
+        pth.lineTo(cx + topW / 2f, cy - h / 2f)
+        pth.lineTo(cx + w / 2f, cy + h / 2f)
+        pth.lineTo(cx - w / 2f, cy + h / 2f)
+        pth.close()
+        p.shader = LinearGradient(cx, cy - h / 2f, cx, cy + h / 2f,
             intArrayOf(Color.rgb(225, 232, 245), Color.rgb(130, 145, 170), Color.rgb(70, 82, 105)),
             floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP)
-        c.drawPath(path, paint)
-        paint.shader = null
-        paint.color = Color.argb(200, 255, 255, 255)
-        c.drawRoundRect(cx - topW * 0.38f, cy - h * 0.36f, cx + topW * 0.2f, cy - h * 0.2f, h * 0.08f, h * 0.08f, paint)
+        cv.drawPath(pth, p)
+        p.shader = null
+        p.color = Color.argb(200, 255, 255, 255)
+        cv.drawRoundRect(cx - topW * 0.38f, cy - h * 0.36f, cx + topW * 0.2f, cy - h * 0.2f, h * 0.08f, h * 0.08f, p)
+        return bmp
+    }
+
+    private fun drawIngot(c: Canvas, cx: Float, cy: Float, w: Float) {
+        val b = ingotBmp ?: return
+        val h = w * b.height / b.width
+        rect.set(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f)
+        c.drawBitmap(b, null, rect, bmpPaint)
     }
 
     private fun wrap(text: String, maxW: Float): List<String> {
@@ -1711,7 +1746,7 @@ class GameView(ctx: Context) : View(ctx) {
         shipBusy = true
         Thread {
             val tiles = DiskCache.loadShips(dir, BASE.size * 16, i)
-                ?: Textures.makeShipTiles(BASE, f).also { DiskCache.saveShips(dir, it, i) }
+                ?: Textures.makeShipTiles(BASE, f).also { t -> saveAsync { DiskCache.saveShips(dir, t, i) } }
             glows = Array(7) { Textures.makeGlow(f.accent(BASE[it])) }
             flameA = Textures.makeGlow(f.flameA)
             flameB = Textures.makeGlow(f.flameB)
@@ -1875,9 +1910,7 @@ class GameView(ctx: Context) : View(ctx) {
         val fw = (barX1 - barX0) * dispFrac.coerceIn(0f, 1f)
         if (fw > u * 0.2f) {
             rect.set(barX0, barY0, barX0 + fw, barY1)
-            paint.shader = LinearGradient(barX0, 0f, barX1, 0f,
-                intArrayOf(Color.rgb(90, 110, 140), Color.rgb(170, 190, 215), Color.rgb(255, 235, 150)),
-                null, Shader.TileMode.CLAMP)
+            paint.shader = barShader
             c.drawRoundRect(rect, u * 0.21f, u * 0.21f, paint)
             paint.shader = null
             val sh = ((time * 0.5f) % 1f) * (barX1 - barX0 + u * 2f) - u

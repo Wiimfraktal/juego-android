@@ -27,7 +27,10 @@ object Noise {
     private fun lerp(a: Float, b: Float, t: Float) = a + (b - a) * t
 
     fun n3(x: Float, y: Float, z: Float): Float {
-        val xi = floor(x).toInt(); val yi = floor(y).toInt(); val zi = floor(z).toInt()
+        // floor rápido sin pasar por double (mismo resultado que floor)
+        var xi = x.toInt(); if (x < xi) xi--
+        var yi = y.toInt(); if (y < yi) yi--
+        var zi = z.toInt(); if (z < zi) zi--
         val u = fade(x - xi); val v = fade(y - yi); val w = fade(z - zi)
         val a = lerp(h(xi, yi, zi), h(xi + 1, yi, zi), u)
         val b = lerp(h(xi, yi + 1, zi), h(xi + 1, yi + 1, zi), u)

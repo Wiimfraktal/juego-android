@@ -35,6 +35,10 @@ object DiskCache {
         } catch (e: Exception) { }
     }
 
+    fun loadNamed(dir: File, name: String): Bitmap? = loadBmp(file(dir, name))
+
+    fun saveNamed(dir: File, name: String, b: Bitmap) = saveBmp(file(dir, name), b)
+
     fun loadThumb(dir: File, skin: Int, r: Int): Bitmap? = loadBmp(file(dir, "thumb_${skin}_$r.png"))
 
     fun saveThumb(dir: File, skin: Int, r: Int, b: Bitmap) = saveBmp(file(dir, "thumb_${skin}_$r.png"), b)

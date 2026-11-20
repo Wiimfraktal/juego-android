@@ -64,7 +64,8 @@ class Game(val cols: Int, val rows: Int) {
     private var contact = 0f
     private var blocked = false
     private var fallT = 0f
-    private var vMax = 0
+    private var progMax = 0
+    private var spawnY = 0
     private var accX = 0f
     private var accY = 0f
     private var nextType = Random.nextInt(Shapes.all.size)
@@ -87,12 +88,13 @@ class Game(val cols: Int, val rows: Int) {
     private fun spawn() {
         val t = nextType
         nextType = Random.nextInt(Shapes.all.size)
-        // solo avanzan hacia arriba o hacia abajo
+        // dirección al azar (arriba o abajo); aparece desfasada del otro lado de la línea central y la cruza
         gx = 0
         gy = if (Random.nextBoolean()) 1 else -1
-        val p = Piece(t, Array(4) { Shapes.all[t][it].copyOf() }, cx, cy)
+        spawnY = if (gy < 0) cy + 1 else cy - 2
+        val p = Piece(t, Array(4) { Shapes.all[t][it].copyOf() }, cx, spawnY)
         piece = p
-        contact = 0f; blocked = false; fallT = 0f; vMax = 0; accX = 0f; accY = 0f
+        contact = 0f; blocked = false; fallT = 0f; progMax = 0; accX = 0f; accY = 0f
         if (collides(p.cells, p.px, p.py)) over = true
     }
 
@@ -106,20 +108,12 @@ class Game(val cols: Int, val rows: Int) {
         return false
     }
 
-    private fun vdist(py: Int) = abs(py - cy)
-
-    /** Avance vertical: hacia arriba si está sobre el centro, hacia abajo si está debajo. */
-    private fun updateDir() {
-        val p = piece ?: return
-        val dy = p.py - cy
-        gx = 0
-        if (dy > 0) gy = 1 else if (dy < 0) gy = -1
-    }
+    /** Avance recorrido en su dirección desde que apareció. */
+    private fun prog(py: Int) = (py - spawnY) * gy
 
     private fun place(p: Piece, nx: Int, ny: Int) {
         p.px = nx; p.py = ny
-        vMax = max(vMax, vdist(ny))
-        updateDir()
+        progMax = max(progMax, prog(ny))
     }
 
     /** Un paso del jugador (puede ser diagonal). Nunca más de 1 celda por debajo del radio máximo alcanzado. */
@@ -129,7 +123,7 @@ class Game(val cols: Int, val rows: Int) {
         val nx = p.px + dx
         val ny = p.py + dy
         if (collides(p.cells, nx, ny)) return false
-        if (vdist(ny) < vMax) return false
+        if (prog(ny) < progMax) return false
         place(p, nx, ny)
         blocked = false
         return true
@@ -169,7 +163,7 @@ class Game(val cols: Int, val rows: Int) {
         for (k in kicks) {
             val nx = p.px + k[0]
             val ny = p.py + k[1]
-            if (vdist(ny) < vMax) continue
+            if (prog(ny) < progMax) continue
             if (!collides(rot, nx, ny)) {
                 p.cells = rot
                 place(p, nx, ny)
@@ -200,7 +194,7 @@ class Game(val cols: Int, val rows: Int) {
         if (over) { overTime += dt; return }
         val p = piece ?: return
         // lenta al nacer y cada vez más rápida hacia el borde
-        val frac = abs(p.py - cy) / (rows / 2f)
+        val frac = max(0, prog(p.py)) / (rows / 2f)
         val fr = (frac / 0.7f).coerceIn(0f, 1f)
         val factor = 0.45f + 0.55f * fr * fr * (3f - 2f * fr)
         val interval = 1f / (speed() * factor)
@@ -266,6 +260,21 @@ class Game(val cols: Int, val rows: Int) {
                 ironDrops.add(intArrayOf(x, y, 15))
                 grid[y][x] = 0
                 ids[y][x] = 0
+            }
+        }
+        // lo que estaba entre el centro y la fila completada se recorre hacia afuera
+        if (fr.isNotEmpty()) {
+            val topG = (0 until cy).filter { it !in fr }.map { grid[it] }
+            val topI = (0 until cy).filter { it !in fr }.map { ids[it] }
+            for (i in 0 until cy) {
+                grid[i] = if (i < topG.size) topG[i] else IntArray(cols)
+                ids[i] = if (i < topI.size) topI[i] else IntArray(cols)
+            }
+            val botG = (rows - 1 downTo cy + 1).filter { it !in fr }.map { grid[it] }
+            val botI = (rows - 1 downTo cy + 1).filter { it !in fr }.map { ids[it] }
+            for (j in 0 until rows - 1 - cy) {
+                grid[rows - 1 - j] = if (j < botG.size) botG[j] else IntArray(cols)
+                ids[rows - 1 - j] = if (j < botI.size) botI[j] else IntArray(cols)
             }
         }
         return fr.size + fc.size
