@@ -724,4 +724,22 @@ object Textures {
         }
         return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
     }
+
+    /** Capa de nubes finas para girar sobre el planeta: disco con jirones de ruido y borde atenuado. */
+    fun makeClouds(sz: Int): Bitmap {
+        val px = IntArray(sz * sz)
+        val c = sz / 2f
+        for (y in 0 until sz) for (x in 0 until sz) {
+            val dx = (x - c) / c; val dy = (y - c) / c
+            val r2 = dx * dx + dy * dy
+            if (r2 >= 1f) continue
+            val zz = sqrt(1f - r2)
+            // coordenadas en la esfera para que los jirones se curven con ella
+            val n = Noise.fbm(dx * 3.2f + 11f, dy * 3.2f / (0.4f + zz), zz * 2f, 5)
+            val streak = Noise.fbm(dx * 1.2f, dy * 6f, 4.4f, 3)
+            val a = smooth(0.5f, 0.8f, n * 0.75f + streak * 0.25f) * smooth(0f, 0.35f, zz)
+            px[y * sz + x] = Color.argb((a * 255f).toInt().coerceIn(0, 255), 255, 255, 255)
+        }
+        return Bitmap.createBitmap(px, sz, sz, Bitmap.Config.ARGB_8888)
+    }
 }

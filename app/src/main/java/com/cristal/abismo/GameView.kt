@@ -498,6 +498,8 @@ class GameView(ctx: Context) : View(ctx) {
     @Volatile private var shadowTex: Bitmap? = null
     @Volatile private var ringTex: Bitmap? = null
     @Volatile private var plateBmp: Bitmap? = null
+    @Volatile private var cloudTex: Bitmap? = null
+    private val cloudPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
     /** Resolución del planeta equipado (más píxeles que en pantalla para el acercamiento), con tope de 2048 px. */
     private fun planetRes() = min((planetR * 2.3f).toInt(), 1024)
@@ -554,6 +556,7 @@ class GameView(ctx: Context) : View(ctx) {
                 puffTex = Array(3) { k -> cachedTex(dir, "ev_puff_$k") { Textures.makePuff(128, 3.1f + k * 7.7f) } }
                 shadowTex = cachedTex(dir, "ev_shadow") { Textures.makeShadow(256) }
                 ringTex = cachedTex(dir, "ev_ring") { Textures.makeRing(512) }
+                cloudTex = cachedTex(dir, "clouds") { Textures.makeClouds(512) }
             })
             tasks.add(1f to {
                 plasmaTex = cachedTex(dir, "ev_plasma") { Textures.makePlasma(384, Color.rgb(255, 235, 190), Color.rgb(255, 90, 20), 4.4f) }
@@ -1113,6 +1116,21 @@ class GameView(ctx: Context) : View(ctx) {
         if (pd != null) {
             rect.set(ccx - planetR, ccy - planetR, ccx + planetR, ccy + planetR)
             c.drawBitmap(pd.bmp, null, rect, bmpPaint)
+            // nubes que giran despacio (dos capas en sentidos opuestos), solo sobre el disco del planeta
+            val ct = cloudTex
+            if (ct != null && !skins[si].classified) {
+                val dr = planetR * 0.93f
+                path.reset(); path.addCircle(ccx, ccy, dr, Path.Direction.CW)
+                c.save(); c.clipPath(path)
+                for (kk in 0 until 2) {
+                    c.save(); c.rotate(time * (if (kk == 0) 1.2f else -0.7f) + kk * 140f, ccx, ccy)
+                    rect.set(ccx - dr, ccy - dr, ccx + dr, ccy + dr)
+                    cloudPaint.alpha = if (kk == 0) 60 else 38
+                    c.drawBitmap(ct, null, rect, cloudPaint)
+                    c.restore()
+                }
+                c.restore()
+            }
             drawDisturbances(c, pd, g)
         }
         c.restore()
@@ -1383,7 +1401,18 @@ class GameView(ctx: Context) : View(ctx) {
                 c.drawBitmap(rd, null, rect, addPaint)
             }
         }
-        for (layer in 0..2) drawShipSprite(c, sp, p.type, p.rot, p.cells, p.fx, p.fy, layer, LIFT_PIECE)
+        val fa = flameA
+        if (fa != null) {
+            val gl = hypot(g.gx.toFloat(), g.gy.toFloat()).coerceAtLeast(1f)
+            val ex = bcx - g.gx / gl * s * 1.4f; val ey = bcy - g.gy / gl * s * 1.4f
+            val fl = 0.75f + 0.15f * sin(time * 31f) + 0.1f * sin(time * 17.3f)
+            val r = s * 0.9f * fl
+            rect.set(ex - r, ey - r, ex + r, ey + r)
+            addPaint.alpha = (150 * fl).toInt().coerceIn(0, 255)
+            c.drawBitmap(fa, null, rect, addPaint)
+        }
+        val hover = LIFT_PIECE * (1f + 0.18f * sin(time * 2.6f))
+        for (layer in 0..2) drawShipSprite(c, sp, p.type, p.rot, p.cells, p.fx, p.fy, layer, hover)
         if (p.bomb) {
             val pulse = 0.6f + 0.4f * sin(time * 9f)
             paint.style = Paint.Style.STROKE
