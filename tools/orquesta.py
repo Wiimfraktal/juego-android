@@ -302,6 +302,149 @@ def game_theme(lib):
     return m.finish(wet=0.32, rt60=2.6, bass=0.25)
 
 
+# ------------------------------------------------------------------ tema "Tensión": oscuro y pulsante
+def tension_theme(lib):
+    bpm = 92
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    total = 24 * bar
+    m = Mix(total, tail=4.0)
+    C, Ab, Fm, G = 36, 32, 41, 31
+    prog = [(C, MIN), (C, MIN), (Ab, MAJ), (Ab, MAJ), (Fm, MIN), (Fm, MIN), (G, MAJ), (G, MAJ)] * 3
+    for b, (root, q) in enumerate(prog):
+        t0 = b * bar
+        lvl = 0.6 + 0.4 * (b // 8) / 2
+        m.add(t0, lib.cb.note(root, bar + 0.1, att=0.2, rel=0.6), 0.55)
+        for k in range(16):
+            n = root + 12 + (0 if k % 4 != 3 else 7)
+            m.add(t0 + k * beat / 4, lib.vc_sp.note(n, beat / 4, att=0.002, rel=0.08), 0.42 * lvl * (1.0 if k % 4 == 0 else 0.6), pan=-0.3)
+        m.add(t0, lib.hn.note(root + 12, bar + 0.2, att=0.6, rel=0.8), 0.30 * lvl, pan=0.1)
+        m.add(t0, lib.vln.note(root + 43, bar + 0.3, att=0.8, rel=1.0), 0.14, pan=0.45)
+        m.add(t0, lib.vla.note(root + 24 + q, bar + 0.3, att=0.5, rel=0.8), 0.18, pan=0.25)
+        for k in range(4):
+            m.add(t0 + k * beat, hit(lib.timp_lo if k % 2 == 0 else lib.timp_mid, 1.5), 0.35 * lvl, pan=-0.2)
+        if b >= 8:
+            m.add(t0, hit(lib.bd), 0.6)
+            for k in range(16):
+                if k % 4 == 2:
+                    m.add(t0 + k * beat / 4, hit(lib.sn_g), 0.22, pan=0.1)
+        if b >= 16:
+            m.add(t0 + 2 * beat, hit(lib.bd2), 0.5)
+            m.add(t0 + beat, hit(lib.sn2), 0.35, pan=0.1)
+            m.add(t0 + 3 * beat, hit(lib.sn), 0.4, pan=0.1)
+            m.add(t0, lib.tbn.note(root + 12, bar * 0.5, att=0.05, rel=0.4), 0.25)
+        if b % 8 == 7:
+            m.add(t0 + 2 * beat, riser(lib, 2 * beat), 0.25)
+            m.add(t0, hit(lib.timp_roll, bar), 0.3)
+    for b in (8, 16):
+        m.add(b * bar, hit(lib.crash), 0.4, pan=0.3)
+        m.add(b * bar, hit(lib.gong), 0.25)
+    return m.finish(wet=0.36, rt60=3.0, bass=0.25)
+
+
+# ------------------------------------------------------------------ tema "Rock": guitarras al frente con batería
+def rock_theme(lib):
+    bpm = 132
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    total = 32 * bar
+    m = Mix(total, tail=3.0)
+    E, Cc, G, D, A, B = 40, 36, 43, 38, 45, 47
+    verse = [(E, MIN), (Cc, MAJ), (G, MAJ), (D, MAJ)]
+    bridge = [(A, MIN), (Cc, MAJ), (D, MAJ), (B, MAJ)]
+    prog = verse * 4 + bridge * 2 + verse * 2
+    gl = np.zeros(len(m.L))
+    gr = np.zeros(len(m.L))
+    for b, (root, q) in enumerate(prog):
+        t0 = b * bar
+        r = root - 12 if root > 43 else root
+        for k in range(8):
+            mute = k in (1, 3, 5, 6)
+            for buf in (gl, gr):
+                mm.power_chord(buf, t0 + k * beat / 2 + RNG.uniform(0, 0.007), r + 12, beat * (0.4 if mute else 0.9), mute)
+            m.add(t0 + k * beat / 2, lib.cb_sp.note(r, beat / 2, att=0.003, rel=0.1), 0.45, pan=0.0)
+        m.add(t0, hit(lib.bd), 0.85)
+        m.add(t0 + 1.5 * beat, hit(lib.bd2), 0.55)
+        m.add(t0 + 2 * beat, hit(lib.bd), 0.75)
+        m.add(t0 + 3.5 * beat, hit(lib.bd2), 0.45)
+        m.add(t0 + beat, hit(lib.sn), 0.6, pan=0.1)
+        m.add(t0 + 3 * beat, hit(lib.sn), 0.65, pan=0.1)
+        if b % 4 == 0:
+            m.add(t0, hit(lib.crash), 0.4, pan=0.3)
+        else:
+            m.add(t0, hit(lib.susp), 0.12, pan=-0.3)
+        m.add(t0, lib.vla.note(r + 24 + q, bar + 0.1, att=0.3, rel=0.5), 0.14, pan=0.3)
+        m.add(t0, lib.vln.note(r + 31, bar + 0.1, att=0.3, rel=0.5), 0.12, pan=-0.3)
+        if 16 <= b < 24:
+            for bt in (0, 1.5, 3):
+                m.add(t0 + bt * beat, lib.hn_st.note(r + 12, 0.4, att=0.003, rel=0.2), 0.3)
+                m.add(t0 + bt * beat, lib.tbn.note(r + 12, 0.35, att=0.004, rel=0.2), 0.25)
+    m.add(0, mm.amp(gl, drive=8.0), 0.22, pan=-0.75)
+    m.add(0, mm.amp(gr, drive=8.0), 0.22, pan=0.75)
+    # guitarra solista en la segunda mitad
+    lead = np.zeros(len(m.L))
+    phrase = [(64, 0, 1), (67, 1, 1), (71, 2, 2), (69, 4, 1), (67, 5, 1), (66, 6, 2), (64, 8, 1), (67, 9, 1), (71, 10, 1),
+              (74, 11, 1), (76, 12, 3), (74, 15, 1)]
+    for base in (24, 28):
+        for i, (n, bt, d) in enumerate(phrase):
+            last = i == len(phrase) - 2
+            sig = mm.gtr_note(midi(n + 12), d * beat + 0.1, bend=2.0 if last else 0.0, vib=0.01 if d >= 2 else 0.0)
+            st = int((base * bar + bt * beat) * SR)
+            seg = sig[: max(0, len(lead) - st)]
+            lead[st:st + len(seg)] += seg
+    m.add(0, mm.amp(lead, drive=9.0, cut=5200), 0.26, pan=0.05)
+    return m.finish(wet=0.26, rt60=2.0, bass=0.25)
+
+
+# ------------------------------------------------------------------ tema "Heroica": fanfarria de metales
+def heroic_theme(lib):
+    bpm = 104
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    total = 32 * bar
+    m = Mix(total, tail=4.0)
+    D, G, Bm, A, Bb, F, Gm = 38, 43, 35, 33, 34, 41, 31
+    prog = [(D, MAJ), (G, MAJ), (Bm, MIN), (A, MAJ), (D, MAJ), (G, MAJ), (A, MAJ), (D, MAJ)] * 2 + \
+           [(Bb, MAJ), (F, MAJ), (Gm, MIN), (A, MAJ)] * 2 + [(D, MAJ), (G, MAJ), (A, MAJ), (D, MAJ)] * 2
+    for b, (root, q) in enumerate(prog):
+        t0 = b * bar
+        tri = triad(root, q)
+        m.add(t0, lib.cb.note(root, bar + 0.1, att=0.05, rel=0.5), 0.5)
+        m.add(t0, lib.tuba.note(root, bar + 0.1, att=0.05, rel=0.5), 0.3, pan=0.15)
+        pat = [0, 7, 12, 7, 0, 7, 12, 16 if q == MAJ else 15]
+        for k in range(8):
+            m.add(t0 + k * beat / 2, lib.vc_sp.note(root + 12 + pat[k], beat / 2, att=0.003, rel=0.1), 0.42, pan=-0.35)
+        for i, n in enumerate(tri):
+            m.add(t0, lib.vla.note(n + 24 if n + 24 < 70 else n + 12, bar + 0.2, att=0.15, rel=0.5), 0.2, pan=0.3 - 0.1 * i)
+        # marcha: bombo, caja con redobles y timbales
+        m.add(t0, hit(lib.bd), 0.75)
+        m.add(t0 + 2 * beat, hit(lib.bd), 0.65)
+        for k in range(8):
+            if k in (2, 6) or (k == 7 and b % 2 == 1):
+                m.add(t0 + k * beat / 2, hit(lib.sn), 0.5, pan=0.1)
+            elif k % 2 == 1:
+                m.add(t0 + k * beat / 2, hit(lib.sn_g), 0.22, pan=0.1)
+        m.add(t0, hit(lib.timp_lo, 2.0), 0.45, pan=-0.2)
+        if b % 8 == 0:
+            m.add(t0, hit(lib.crash), 0.45, pan=0.3)
+    fan = [(62, 0, 1.5), (66, 1.5, 0.5), (69, 2, 2), (74, 4, 3), (71, 7, 1), (69, 8, 1.5), (71, 9.5, 0.5), (73, 10, 2),
+           (69, 12, 4), (74, 16, 1.5), (73, 17.5, 0.5), (71, 18, 2), (67, 20, 2), (69, 22, 2), (73, 24, 2), (76, 26, 2), (74, 28, 4)]
+    for base in (0, 8, 24):
+        for n, bt, d in fan:
+            st = base * bar + bt * beat
+            m.add(st, lib.tpt.note(n, d * beat + 0.05, att=0.02, rel=0.3), 0.4, pan=0.15)
+            m.add(st, lib.hn.note(n - 12, d * beat + 0.05, att=0.04, rel=0.3), 0.4, pan=-0.1)
+            m.add(st, lib.tbn.note(n - 12 - 4, d * beat + 0.05, att=0.04, rel=0.3), 0.2, pan=0.25)
+    for b in range(16, 24):
+        root, q = prog[b]
+        m.add(b * bar, lib.vln.note(root + 36 + q, bar + 0.2, att=0.1, rel=0.5), 0.3, pan=-0.3)
+        m.add(b * bar, lib.vln.note(root + 43, bar + 0.2, att=0.1, rel=0.5), 0.25, pan=0.3)
+    m.add(16 * bar - 2 * beat, riser(lib, 2 * beat), 0.3)
+    m.add(24 * bar - 2 * beat, riser(lib, 2 * beat), 0.3)
+    m.add(24 * bar, hit(lib.gong), 0.3)
+    return m.finish(wet=0.32, rt60=2.8, bass=0.25)
+
+
 # ------------------------------------------------------------------ menú (lento y emotivo)
 def menu_theme(lib):
     bpm = 62
@@ -395,6 +538,10 @@ if __name__ == "__main__":
     what = sys.argv[3] if len(sys.argv) > 3 else "all"
     if what in ("all", "game"):
         mm.save(game_theme(lib), out, "game_theme")
+    if what in ("all", "themes"):
+        mm.save(tension_theme(lib), out, "theme_tension")
+        mm.save(rock_theme(lib), out, "theme_rock")
+        mm.save(heroic_theme(lib), out, "theme_heroic")
     if what in ("all", "menu"):
         mm.save(menu_theme(lib), out, "menu_theme")
     if what in ("all", "solo"):

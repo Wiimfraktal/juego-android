@@ -14,6 +14,8 @@ class Piece(val type: Int, var cells: Array<IntArray>, var px: Int, var py: Int)
     var fy = py.toFloat()
     /** Rotación actual (0..3), para elegir el dibujo de la nave. */
     var rot = 0
+    /** Nave bomba: al fijarse explota y destruye las naves cercanas. */
+    var bomb = false
 }
 
 /** Nave ya colocada: se guarda entera para dibujarla completa y para moverla con la gravedad. */
@@ -58,6 +60,14 @@ class Game(val cols: Int, val rows: Int) {
     val placed = LinkedHashMap<Int, Placed>()
     /** Filas completadas recientemente (la vista las usa para el destello de explosión). */
     val clearedRows = ArrayList<Int>()
+    /** Líneas completadas en cada colocación (la vista lo usa para medallas y voz). */
+    val clearEvents = ArrayList<Int>()
+    /** Detonaciones de bomba: (x, y, naves destruidas). */
+    val bombEvents = ArrayList<IntArray>()
+    /** Colocaciones seguidas que completaron línea. */
+    var streak = 0
+    var bestStreak = 0
+    var bombsDetonated = 0
 
     var piece: Piece? = null
     var gx = 0
@@ -113,6 +123,7 @@ class Game(val cols: Int, val rows: Int) {
         gy = if (Random.nextBoolean()) 1 else -1
         spawnY = if (gy < 0) cy + 1 else cy - 2
         val p = Piece(t, Array(4) { Shapes.all[t][it].copyOf() }, cx, spawnY)
+        p.bomb = level >= 2 && Random.nextFloat() < 0.07f
         piece = p
         contact = 0f; blocked = false; fallT = 0f; progMax = 0; accX = 0f; accY = 0f
         if (collides(p.cells, p.px, p.py)) over = true
@@ -257,7 +268,10 @@ class Game(val cols: Int, val rows: Int) {
         }
         placed[id] = Placed(id, p.type, p.rot, p.px, p.py)
         piece = null
+        if (p.bomb) { detonate(id, p); danger = false }
         val n = clearLines()
+        if (n > 0) { streak++; bestStreak = max(bestStreak, streak); clearEvents.add(n) }
+        else if (!p.bomb) streak = 0
         if (n > 0) {
             lines += n
             level = 1 + lines / 6
@@ -266,6 +280,34 @@ class Game(val cols: Int, val rows: Int) {
         score += 10
         if (danger && n == 0) { over = true; return }
         spawn()
+    }
+
+    /** Explosión de la nave bomba: destruye las naves con alguna celda a 2 casillas o menos. */
+    private fun detonate(id: Int, p: Piece) {
+        val kill = HashSet<Int>()
+        kill.add(id)
+        var sx = 0; var sy = 0
+        for (c in p.cells) {
+            val bx = p.px + c[0]; val by = p.py + c[1]
+            sx += bx; sy += by
+            for (yy in by - 2..by + 2) for (xx in bx - 2..bx + 2) {
+                if (yy < 0 || yy >= rows || xx < 0 || xx >= cols) continue
+                if (grid[yy][xx] != 0) kill.add(ids[yy][xx])
+            }
+        }
+        for (y in 0 until rows) for (x in 0 until cols) {
+            if (grid[y][x] != 0 && ids[y][x] in kill) {
+                bursts.add(intArrayOf(x, y, grid[y][x]))
+                ironDrops.add(intArrayOf(x, y, 15))
+                grid[y][x] = 0
+                ids[y][x] = 0
+            }
+        }
+        for (k in kill) placed.remove(k)
+        bombsDetonated++
+        score += 40 * (kill.size - 1) * level
+        bombEvents.add(intArrayOf(sx / 4, sy / 4, kill.size - 1))
+        settle()
     }
 
     private fun rowFull(y: Int) = grid[y].all { it != 0 }

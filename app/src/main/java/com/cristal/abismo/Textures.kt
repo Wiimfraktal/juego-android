@@ -534,6 +534,33 @@ object Textures {
         return bmp
     }
 
+    /** Galaxia espiral procedural (núcleo cálido, brazos azulados con nubes rosadas). */
+    fun makeGalaxy(sz: Int): Bitmap {
+        val px = IntArray(sz * sz)
+        val h = sz / 2f
+        for (y in 0 until sz) for (x in 0 until sz) {
+            val nx = (x + 0.5f - h) / h
+            val ny = (y + 0.5f - h) / h
+            val r = sqrt(nx * nx + ny * ny)
+            if (r >= 1f) continue
+            val a = kotlin.math.atan2(ny, nx)
+            val phi = a - kotlin.math.ln(r + 0.05f) * 2.6f
+            val arm = ((0.5f + 0.5f * kotlin.math.cos(2f * phi)).pow(3f))
+            val n = Noise.fbm(nx * 4f + 3f, ny * 4f, 1.5f, 4)
+            val core = kotlin.math.exp(-r * 9f)
+            val disk = kotlin.math.exp(-r * 2.6f)
+            val armB = arm * disk * (0.45f + 0.9f * n)
+            val pink = smooth(0.62f, 0.75f, n) * arm * disk
+            val br = (core * 1.6f + armB * 0.9f).coerceIn(0f, 1.5f)
+            val rr = 255f * (core * 1.0f + armB * 0.62f + pink * 0.8f)
+            val gg = 255f * (core * 0.88f + armB * 0.72f + pink * 0.3f)
+            val bb = 255f * (core * 0.7f + armB * 1.0f + pink * 0.55f)
+            val al = (br * 0.9f).coerceIn(0f, 1f) * smooth(1f, 0.85f, r)
+            px[y * sz + x] = Color.argb(cl(255f * al), cl(rr), cl(gg), cl(bb))
+        }
+        return Bitmap.createBitmap(px, sz, sz, Bitmap.Config.ARGB_8888)
+    }
+
     /** Roca irregular con relieve e iluminación lateral. */
     fun makeRock(size: Int, seed: Int): Bitmap {
         val px = IntArray(size * size)
