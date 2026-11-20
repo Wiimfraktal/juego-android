@@ -65,6 +65,23 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private val skins = Skins.all
+    private val tips = arrayOf(
+        "Arrastra la nave en círculo para rodearla alrededor del centro y colocarla donde quieras.",
+        "Completa una línea para destruir las naves enteras que la forman.",
+        "El hierro de cada nave llena la barra; al llenarla ganas lingotes.",
+        "Las naves son lentas al aparecer: aprovecha para ubicarlas con calma.",
+        "Un empujón rápido hacia afuera lanza la nave de golpe.",
+        "Toca la pantalla para girar la nave antes de colocarla.",
+        "El contorno de color muestra la celda exacta donde quedará la nave.",
+        "Si los bordes parpadean en rojo, las naves están demasiado cerca del centro.",
+        "Las naves no pueden acercarse al centro: solo alejarse o moverse a su alrededor.",
+        "Gasta tus lingotes en skins de planeta desde la pestaña Personalizar.",
+        "Mientras el juego está en pausa no se ve el tablero.",
+        "Puedes desactivar la música y los efectos desde el engrane del menú.",
+        "Mantén libre la zona central: es lo que decide la partida.",
+        "Cada nivel aumenta un poco la velocidad de las naves."
+    )
+    private val tip = tips[Random.nextInt(tips.size)]
     private var game: Game? = null
     private var s = 0f
     private var u = 0f
@@ -1081,6 +1098,17 @@ class GameView(ctx: Context) : View(ctx) {
         c.drawRoundRect(cx - topW * 0.38f, cy - h * 0.36f, cx + topW * 0.2f, cy - h * 0.2f, h * 0.08f, h * 0.08f, paint)
     }
 
+    private fun wrap(text: String, maxW: Float): List<String> {
+        val lines = ArrayList<String>()
+        var cur = ""
+        for (w in text.split(" ")) {
+            val t = if (cur.isEmpty()) w else "$cur $w"
+            if (paint.measureText(t) > maxW && cur.isNotEmpty()) { lines.add(cur); cur = w } else cur = t
+        }
+        if (cur.isNotEmpty()) lines.add(cur)
+        return lines
+    }
+
     private fun drawLoading(c: Canvas) {
         paint.style = Paint.Style.FILL
         paint.typeface = Typeface.DEFAULT_BOLD
@@ -1113,6 +1141,13 @@ class GameView(ctx: Context) : View(ctx) {
         paint.textSize = u * 0.32f
         paint.color = Color.argb(170, 190, 215, 255)
         c.drawText("La primera vez tarda más; después será casi instantáneo", width / 2f, y0 + u * 2.0f, paint)
+        paint.textSize = u * 0.4f
+        paint.color = Color.argb(240, 255, 225, 150)
+        c.drawText("Consejo", width / 2f, y0 + u * 3.6f, paint)
+        paint.color = Color.argb(230, 255, 255, 255)
+        paint.textSize = u * 0.42f
+        var ty = y0 + u * 4.3f
+        for (line in wrap(tip, width - u * 3f)) { c.drawText(line, width / 2f, ty, paint); ty += u * 0.62f }
     }
 
     // ---------- menú ----------

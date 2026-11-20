@@ -229,8 +229,8 @@ class Game(val cols: Int, val rows: Int) {
         // lenta al nacer y cada vez más rápida hacia el borde
         val axisDist = if (gx != 0) abs(p.fx - cx) else abs(p.fy - cy)
         val half = if (gx != 0) cols / 2f else rows / 2f
-        val fr = (axisDist / half / 0.55f).coerceIn(0f, 1f)
-        val factor = 0.15f + 0.85f * fr * fr * (3f - 2f * fr)
+        val fr = (axisDist / half / 0.7f).coerceIn(0f, 1f)
+        val factor = 0.45f + 0.55f * fr * fr * (3f - 2f * fr)
         var rem = speed() * factor * dt
         var blocked = false
         while (rem > 1e-4f) {
