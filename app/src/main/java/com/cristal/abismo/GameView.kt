@@ -810,8 +810,11 @@ class GameView(ctx: Context) : View(ctx) {
         val pd = cache[skinSel] ?: return
         shake = if (big) 2.2f else 2.0f
         flashWhite = if (big) 1.5f else 1.4f
-        val ex = ccx + pd.cities[0] * planetR * planetSc
-        val ey = ccy + pd.cities[1] * planetR * planetSc
+        val ra = Math.toRadians(planetAng.toDouble())
+        val cxr = (pd.cities[0] * kotlin.math.cos(ra) - pd.cities[1] * kotlin.math.sin(ra)).toFloat()
+        val cyr = (pd.cities[0] * kotlin.math.sin(ra) + pd.cities[1] * kotlin.math.cos(ra)).toFloat()
+        val ex = ccx + cxr * planetR * planetSc
+        val ey = ccy + cyr * planetR * planetSc
         val n = if (big) 220 else 160
         val sp = sprWhite ?: return
         val fi = sprFire ?: return
@@ -1132,11 +1135,16 @@ class GameView(ctx: Context) : View(ctx) {
     private fun displayedSkin(): Int =
         if (phase == 0 && tab == 1 && !skins[preview].classified && cache[preview] != null) preview else skinSel
 
+    /** Giro del planeta: lento en el menú; se congela al explotar y queda fijo toda la partida. */
+    private var planetAng = 0f
+
     private fun drawPlanet(c: Canvas, g: Game) {
+        if (phase <= 0 && !paused) planetAng = (planetAng + frameDt * 2.2f) % 360f
         val si = displayedSkin()
         val pd = cache[si]
         c.save()
         c.scale(planetSc, planetSc, ccx, ccy)
+        c.rotate(planetAng, ccx, ccy)
         paint.shader = atmoShaders[si]
         c.drawRect(ccx - planetR * 1.5f, ccy - planetR * 1.5f, ccx + planetR * 1.5f, ccy + planetR * 1.5f, paint)
         paint.shader = null

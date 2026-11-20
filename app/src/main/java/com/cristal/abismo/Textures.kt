@@ -167,8 +167,8 @@ object Textures {
                 // nariz: se afila en los primeros 30 px de la columna principal
                 val na = along - aStart
                 if (na < 30f && dsp > 7f + (na / 30f) * 25f) cut[i] = true
-            } else if (type == 3 || type == 4) {
-                // S y Z: nave de doble casco sin alas; el casco lateral termina en cápsula redondeada al frente
+            } else if (type == 3 || type == 4 || type == 1) {
+                // S, Z y O: nave de doble casco sin alas; el casco lateral termina en cápsula redondeada al frente
                 val la = ((along % 64f) + 64f) % 64f
                 val cellStart = along - la
                 val front = !cellOcc.let { co ->
