@@ -664,9 +664,9 @@ class GameView(ctx: Context) : View(ctx) {
             drawHud(canvas, g)
             drawMedals(canvas)
             drawEventBanner(canvas)
-        }
-        drawAchToast(canvas) else if (phase == -1) drawLoading(canvas)
+        } else if (phase == -1) drawLoading(canvas)
         else drawMenu(canvas)
+        drawAchToast(canvas)
         if (flashWhite > 0f) {
             paint.style = Paint.Style.FILL
             paint.shader = null
