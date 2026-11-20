@@ -479,8 +479,8 @@ class GameView(ctx: Context) : View(ctx) {
         // música: calmada en carga y menú, épica en partida (vuelve a la calmada tras perder)
         music.play(if (phase <= 0 || (phase == 2 && g.over && g.overTime > 1.5f)) 0 else 1)
         music.duck = if (paused) 0.35f else if (soloT > 0f) 0.4f else 1f
-        soloT = max(0f, soloT - rdt)
         val rdt = min(0.05f, (now - lastMusic) / 1e9f)
+        soloT = max(0f, soloT - rdt)
         music.update(rdt)
         lastMusic = now
         pauseAnim += ((if (paused) 1f else 0f) - pauseAnim) * min(1f, rdt * 11f)
