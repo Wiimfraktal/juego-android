@@ -91,12 +91,12 @@ object Textures {
         val left = mask and 8 != 0
         val nb = (if (up) 1 else 0) + (if (right) 1 else 0) + (if (down) 1 else 0) + (if (left) 1 else 0)
         val corner = nb == 2 && ((up && right) || (right && down) || (down && left) || (left && up))
-        val ins = 3f
+        val ins = 2f
         val iL = if (left) 0f else ins
         val iR = if (right) 0f else ins
         val iT = if (up) 0f else ins
         val iB = if (down) 0f else ins
-        val k = if (nb <= 1) 20f else 13f
+        val k = if (nb <= 1) 9f else 6f
         val sd = seed.toFloat() + mask * 0.37f
         val cr = Color.red(col).toFloat(); val cg = Color.green(col).toFloat(); val cb = Color.blue(col).toFloat()
         val h = t / 2f
@@ -138,6 +138,11 @@ object Textures {
             val n = Noise.fbm(fx * 0.05f, fy * 0.3f, sd, 3)
             val grain = Noise.fbm(fx * 0.7f, fy * 0.7f, sd + 9f, 2)
             var lum = (1.2f - 0.65f * ((u + v) / 2f)) * (0.75f + 0.4f * n) * (0.9f + 0.2f * grain)
+            // desgaste: vetas de suciedad, oclusión en el borde de cada panel y rayones
+            lum *= 0.82f + 0.36f * Noise.fbm(fx * 0.9f, fy * 0.05f, sd + 4f, 3)
+            val pe = min(min(fx % 32f, 32f - fx % 32f), min(fy % 32f, 32f - fy % 32f))
+            lum *= 0.78f + 0.22f * smooth(0f, 5f, pe)
+            if (Noise.fbm(fx * 0.4f + 50f, fy * 1.6f, sd, 2) > 0.72f) lum *= 1.35f
             var r = 66f * lum; var g = 74f * lum; var b = 92f * lum
 
             // costuras de paneles
@@ -214,9 +219,10 @@ object Textures {
             val q = dist / rad
             val z = sqrt(max(0f, 1f - q * q))
             val dot = (nx / rad) * -0.5f + (ny / rad) * -0.5f + z * 0.7f
-            val cr = Noise.fbm(nx * 3.2f + sd, ny * 3.2f, 2f, 4)
+            val cr = Noise.fbm(nx * 3.2f + sd, ny * 3.2f, 2f, 5)
+            val crat = smooth(0.58f, 0.66f, Noise.fbm(nx * 5f + sd, ny * 5f, 7f, 3))
             val grain = Noise.fbm(nx * 9f + sd, ny * 9f, 5f, 3)
-            val shade = (0.22f + 0.95f * max(0f, dot) + (cr - 0.5f) * 0.55f) * (0.8f + 0.4f * grain)
+            val shade = (0.22f + 0.95f * max(0f, dot) + (cr - 0.5f) * 0.55f) * (0.8f + 0.4f * grain) * (1f - 0.4f * crat)
             val r = 128f * shade; val g = 112f * shade; val b = 98f * shade
             px[y * size + x] = Color.argb(cl(255f * edge), cl(r), cl(g), cl(b))
         }
@@ -339,7 +345,8 @@ object Textures {
             val cloud = smooth(0.50f, 0.72f, cn) * skin.cloudAmt
             val dot = nx * lx + ny * ly + nz * lz
             val day = smooth(-0.10f, 0.40f, dot)
-            val shadeV = 0.03f + 0.97f * day
+            val csh = smooth(0.50f, 0.72f, Noise.fbm(sx * 1.5f + 40f - lx * 0.12f, sy * 2.4f - ly * 0.12f, sz * 1.5f + 7f - lz * 0.12f, 4))
+            val shadeV = (0.03f + 0.97f * day) * (1f - 0.3f * csh * (1f - cloud))
             r = (r * (1f - cloud) + clr * cloud) * shadeV
             g = (g * (1f - cloud) + clg * cloud) * shadeV
             b = (b * (1f - cloud) + clb * cloud) * shadeV
@@ -356,6 +363,9 @@ object Textures {
             val fres = (1f - nz).pow(2.6f)
             val atm = fres * (0.18f + 0.82f * day)
             r += 255f * atr * atm * 1.4f; g += 255f * atg * atm * 1.4f; b += 255f * atb * atm * 1.4f
+            val sunset = smooth(-0.12f, 0.12f, dot) * (1f - smooth(0.12f, 0.5f, dot))
+            val sn = sunset * (0.15f + fres * 1.2f) * 0.35f
+            r += 255f * sn; g += 140f * sn; b += 60f * sn
             px[y * d + x] = Color.argb(cl(255f * edge), cl(r), cl(g), cl(b))
         }
         }

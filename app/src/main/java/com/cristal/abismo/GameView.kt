@@ -160,6 +160,7 @@ class GameView(ctx: Context) : View(ctx) {
     private val buyRect = RectF()
     private val menuRect = RectF()
     private var confirmExit = false
+    private var gridLines = FloatArray(0)
     private var cardW = 0f
     private var cardH = 0f
     private var cardsTop = 0f
@@ -281,14 +282,18 @@ class GameView(ctx: Context) : View(ctx) {
         }
         startLoading()
 
+        val gl = ArrayList<Float>()
+        for (i in 0..COLS) { gl.add(ox + i * s); gl.add(oy); gl.add(ox + i * s); gl.add(oy + rows * s) }
+        for (j in 0..rows) { gl.add(ox); gl.add(oy + j * s); gl.add(ox + COLS * s); gl.add(oy + j * s) }
+        gridLines = gl.toFloatArray()
         stars.clear()
         val maxD = hypot(w.toFloat(), h.toFloat()) / 2f
-        repeat(120) {
+        repeat(220) {
             stars.add(Star(Random.nextFloat() * 6.2832f, planetR + Random.nextFloat() * (maxD - planetR), 0.2f + Random.nextFloat() * 0.8f))
         }
         cosmic.clear()
         meteors.clear()
-        val kinds = intArrayOf(0, 0, 0, 0, 0, 0, 2, 2, 3, 3, 3, 1)
+        val kinds = intArrayOf(0, 0, 0, 1)
         for (k in kinds) {
             val c = Cosmic(k, 0f, 0f, 0f, 0f, 0f, 0, 0f)
             respawn(c, maxD, true)
@@ -338,7 +343,6 @@ class GameView(ctx: Context) : View(ctx) {
                 ?: Textures.makeShipTiles(BASE).also { DiskCache.saveShips(dir, it) }
             step(3f)
             rocks = Array(5) { Textures.makeRock(96, it * 7 + 1) }
-            moons = Array(3) { Textures.makeMoon(96, it + 1, MOON_TINTS[it]) }
             step(1f)
             for (i in skins.indices) if (i != skinSel) skin(i, 1.5f)
             progress = 1f
@@ -426,7 +430,9 @@ class GameView(ctx: Context) : View(ctx) {
         if (phase >= 0) drawPlanet(canvas, g)
         drawHaze(canvas)
         if (phase == 2) {
+            drawGrid(canvas)
             drawDanger(canvas, near)
+            drawGhost(canvas, g)
             drawShadow(canvas, g)
             drawLocked(canvas, g)
             drawPiece(canvas, g)
@@ -613,13 +619,18 @@ class GameView(ctx: Context) : View(ctx) {
             val ca = cos(st.ang); val sa = sin(st.ang)
             val px = ccx + ca * st.dist
             val py = ccy + sa * st.dist
-            paint.strokeWidth = 1.2f + 2f * st.z
-            paint.color = Color.argb((fade * (70f + 185f * st.z)).toInt().coerceIn(0, 255), 200, 215, 255)
+            val tw = 0.75f + 0.25f * sin(time * 3f + st.ang * 40f)
+            val tint = (st.ang * 100f).toInt() and 3
+            val tr = if (tint == 0) 255 else if (tint == 1) 185 else 235
+            val tg = if (tint == 0) 232 else if (tint == 1) 212 else 240
+            val tb = if (tint == 0) 195 else 255
+            paint.strokeWidth = 1.2f + 2.2f * st.z
+            paint.color = Color.argb((fade * tw * (70f + 185f * st.z)).toInt().coerceIn(0, 255), tr, tg, tb)
             c.drawLine(px, py, ccx + ca * (st.dist + len), ccy + sa * (st.dist + len), paint)
-            if (wh != null && st.z > 0.65f) {
-                val r = s * (0.45f + 0.5f * st.z)
+            if (wh != null && st.z > 0.5f) {
+                val r = s * (0.6f + 0.9f * st.z)
                 rect.set(px - r, py - r, px + r, py + r)
-                addPaint.alpha = (fade * 150f).toInt()
+                addPaint.alpha = (fade * tw * 210f).toInt().coerceIn(0, 255)
                 c.drawBitmap(wh, null, rect, addPaint)
             }
         }
@@ -850,6 +861,35 @@ class GameView(ctx: Context) : View(ctx) {
         paint.style = Paint.Style.FILL
     }
 
+    /** Cuadrícula del campo: muestra en qué celdas se colocan realmente las naves. */
+    private fun drawGrid(c: Canvas) {
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 1.5f
+        paint.color = Color.argb(38, 170, 205, 255)
+        c.drawLines(gridLines, paint)
+        paint.style = Paint.Style.FILL
+    }
+
+    /** Contorno de las celdas que ocuparía la nave si se fijara ahora (a nivel del suelo). */
+    private fun drawGhost(c: Canvas, g: Game) {
+        val p = g.piece ?: return
+        val col = BASE[p.type]
+        val bx = Math.round(p.fx)
+        val by = Math.round(p.fy)
+        for (cell in p.cells) {
+            val x = ox + (bx + cell[0]) * s
+            val y = oy + (by + cell[1]) * s
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(46, Color.red(col), Color.green(col), Color.blue(col))
+            c.drawRect(x, y, x + s, y + s, paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 3f
+            paint.color = Color.argb(170, Color.red(col), Color.green(col), Color.blue(col))
+            c.drawRect(x + 1.5f, y + 1.5f, x + s - 1.5f, y + s - 1.5f, paint)
+        }
+        paint.style = Paint.Style.FILL
+    }
+
     private fun drawShadow(c: Canvas, g: Game) {
         val p = g.piece ?: return
         paint.color = Color.argb(100, 0, 0, 0)
@@ -857,7 +897,7 @@ class GameView(ctx: Context) : View(ctx) {
         for (cell in p.cells) {
             val x = ox + (p.fx + cell[0]) * s + o
             val y = oy + (p.fy + cell[1]) * s + o
-            c.drawRoundRect(x, y, x + s, y + s, s * 0.25f, s * 0.25f, paint)
+            c.drawRoundRect(x, y, x + s, y + s, s * 0.08f, s * 0.08f, paint)
         }
     }
 
