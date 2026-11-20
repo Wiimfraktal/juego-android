@@ -23,6 +23,8 @@ class Placed(val id: Int, val type: Int, val rot: Int, var px: Int, var py: Int)
     val cells: Array<IntArray> = Shapes.cells(type, rot)
     /** Desfase visual (en celdas) que se anima hasta 0 cuando la nave se recorre. */
     var vy = 0f
+    /** Velocidad de caída visual (acelera como con gravedad). */
+    var vv = 0f
 }
 
 object Shapes {
@@ -93,6 +95,8 @@ class Game(val cols: Int, val rows: Int) {
 
     private var contact = 0f
     private var blocked = false
+    /** Veces que un giro o arrastre reinició el contacto de la nave actual (máximo 4: luego se coloca igual). */
+    private var resets = 0
     private var fallT = 0f
     private var progMax = 0
     private var spawnY = 0
@@ -116,6 +120,7 @@ class Game(val cols: Int, val rows: Int) {
     private fun speed() = baseSpeed * min(2.2f, 1f + 0.07f * (level - 1))
 
     private fun spawn() {
+        resets = 0; contact = 0f; blocked = false
         val t = nextType
         nextType = Random.nextInt(Shapes.all.size)
         // dirección al azar (arriba o abajo); aparece desfasada del otro lado de la línea central y la cruza
@@ -156,7 +161,7 @@ class Game(val cols: Int, val rows: Int) {
         if (collides(p.cells, nx, ny)) return false
         if (prog(ny) < progMax) return false
         place(p, nx, ny)
-        blocked = false
+        touchReset()
         return true
     }
 
@@ -183,6 +188,10 @@ class Game(val cols: Int, val rows: Int) {
         accY = accY.coerceIn(-step, step)
     }
 
+    private fun touchReset() {
+        if (blocked) { if (resets < 4) { resets++; contact = 0f } } else contact = 0f
+    }
+
     fun rotate() {
         val p = piece ?: return
         if (over || p.type == 1) return
@@ -199,7 +208,7 @@ class Game(val cols: Int, val rows: Int) {
                 p.cells = rot
                 p.rot = (p.rot + 1) and 3
                 place(p, nx, ny)
-                blocked = false
+                touchReset()
                 return
             }
         }
@@ -224,8 +233,13 @@ class Game(val cols: Int, val rows: Int) {
 
     fun update(dt: Float) {
         // animación del recorrido de las naves colocadas
-        val st = 9f * dt
-        for (sh in placed.values) if (sh.vy != 0f) sh.vy = if (abs(sh.vy) <= st) 0f else sh.vy - Math.signum(sh.vy) * st
+        // caída con gravedad: cada nave acelera hasta su lugar y rebota apenas al llegar
+        for (sh in placed.values) {
+            if (sh.vy == 0f) { sh.vv = 0f; continue }
+            sh.vv = min(28f, sh.vv + 45f * dt)
+            val st = sh.vv * dt
+            sh.vy = if (abs(sh.vy) <= st) 0f else sh.vy - Math.signum(sh.vy) * st
+        }
         if (over) { overTime += dt; return }
         val p = piece ?: return
         // lenta al nacer y cada vez más rápida hacia el borde
@@ -247,6 +261,9 @@ class Game(val cols: Int, val rows: Int) {
         val k = min(1f, dt * 16f)
         p.fx += (p.px - p.fx) * k
         p.fy += (p.py + gy * prog - p.fy) * k
+        // si tras girar o moverla ya puede seguir avanzando, deja de estar bloqueada
+        if (blocked && (!collides(p.cells, p.px + gx, p.py + gy) ||
+                (gx != 0 && gy != 0 && (!collides(p.cells, p.px + gx, p.py) || !collides(p.cells, p.px, p.py + gy))))) blocked = false
         if (blocked) {
             contact += dt
             if (contact > 0.18f) lock()

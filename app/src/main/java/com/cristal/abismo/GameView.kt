@@ -71,6 +71,7 @@ class GameView(ctx: Context) : View(ctx) {
         const val MENU_SC = 1.9f
         const val APPROACH = 1.6f
         const val ESC0 = 1.4f
+        const val EV_DUR = 26f
         const val LAUNCH = 1.5f
         const val ESC1 = 0.7f
         val BASE = intArrayOf(
@@ -160,6 +161,7 @@ class GameView(ctx: Context) : View(ctx) {
     private val meteors = ArrayList<Meteor>()
     private val puffs = ArrayList<Puff>()
     private var frameDt = 0f
+    private val dustPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = android.graphics.LightingColorFilter(0xFFB8C4E8.toInt(), 0) }
     private val smokePaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = android.graphics.LightingColorFilter(0xFF8C847C.toInt(), 0) }
     private val hotPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
         xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD); colorFilter = android.graphics.LightingColorFilter(0xFFFF9A40.toInt(), 0) }
@@ -392,7 +394,7 @@ class GameView(ctx: Context) : View(ctx) {
         for (i in 0 until 5) emRows[i].set(u * 0.45f, emTop + i * u * 1.5f, w - u * 0.45f, emTop + i * u * 1.5f + u * 1.3f)
         clampCarousel()
         medalPops.clear(); voiceQueue.clear(); achToasts.clear()
-        evKind = -1; evTimer = 40f + Random.nextFloat() * 40f; gameTime = 0f
+        evKind = -1; evTimer = 18f + Random.nextFloat() * 15f; gameTime = 0f
 
         for (i in skins.indices) {
             val a = skins[i].atmo
@@ -708,7 +710,7 @@ class GameView(ctx: Context) : View(ctx) {
                 evTimer -= dt
                 if (evKind < 0 && evTimer <= 0f) startEvent()
             }
-            if (evKind >= 0) { evT += dt; if (evT > 10f) evKind = -1 }
+            if (evKind >= 0) { evT += dt; if (evT > EV_DUR) evKind = -1 }
             if (celebT <= 0f) emitThrust(g)
             if (celebT > 0f) emitWeld(dt)
             updateBar(g, dt)
@@ -843,6 +845,7 @@ class GameView(ctx: Context) : View(ctx) {
         if (!ready()) return
         phase = 1; phaseT = 0f
         spawnExplosion(false)
+        sfx.bigBoom()
     }
 
     private fun finishGame(g: Game) {
@@ -1646,7 +1649,18 @@ class GameView(ctx: Context) : View(ctx) {
                 n == 3 -> stats.add("triple")
                 n >= 4 -> stats.add("quad")
             }
-            if (n >= 2) awardMedal(min(n, 4) - 1) else voice(Announcer.LINE)
+            if (n >= 2) awardMedal(min(n, 4) - 1)
+            else {
+                // la voz sigue la cuenta de líneas de la partida: hitos con número y frases variadas entre ellos
+                val total = g.lines
+                val ms = Announcer.MILESTONES[total]
+                voice(when {
+                    ms != null -> ms
+                    total <= 1 -> Announcer.LINE
+                    g.streak >= 3 -> Announcer.BRUTAL
+                    else -> intArrayOf(Announcer.OTHER, Announcer.GREAT, Announcer.KEEP, Announcer.LINE)[total % 4]
+                })
+            }
             val si = when (g.streak) { 3 -> 4; 5 -> 5; 8 -> 6; 12 -> 7; 16 -> 8; 20 -> 9; else -> -1 }
             if (si >= 0) awardMedal(si)
             if (alert > 0.55f) { awardMedal(12); stats.add("limit") }
@@ -1668,12 +1682,12 @@ class GameView(ctx: Context) : View(ctx) {
         if (hadEvents) { stats.max("streak", g.bestStreak); checkAch() }
     }
 
-    private val evNames = arrayOf("LLUVIA DE METEOROS", "TORMENTA SOLAR", "FLOTA ALIADA", "ECLIPSE", "AURORA CÓSMICA", "AGUJERO DE GUSANO")
+    private val evNames = arrayOf("LLUVIA DE METEOROS", "TORMENTA SOLAR", "FLOTA ALIADA", "ECLIPSE", "AURORA CÓSMICA", "AGUJERO DE GUSANO", "VENTISCA DE POLVO ESTELAR")
 
     private fun startEvent() {
         evKind = Random.nextInt(evNames.size)
         evT = 0f
-        evTimer = 40f + Random.nextFloat() * 40f
+        evTimer = EV_DUR + 20f + Random.nextFloat() * 25f
         evX = width * (0.2f + Random.nextFloat() * 0.6f)
         evY = height * (0.15f + Random.nextFloat() * 0.2f)
         evFleet.clear()
@@ -1687,7 +1701,7 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
-    private fun evEnv(): Float = (evT / 1.2f).coerceIn(0f, 1f) * ((10f - evT) / 1.8f).coerceIn(0f, 1f)
+    private fun evEnv(): Float = (evT / 3f).coerceIn(0f, 1f) * ((EV_DUR - evT) / 4f).coerceIn(0f, 1f)
 
     private fun addPuff(x: Float, y: Float, vx: Float, vy: Float, life: Float, size: Float, grow: Float, kind: Int) {
         if (puffs.size >= 240) return
@@ -1711,6 +1725,7 @@ class GameView(ctx: Context) : View(ctx) {
             when (p.kind) {
                 0 -> { smokePaint.alpha = (150f * k * k.coerceAtMost(1f) * smoothIn(age, 0.08f)).toInt().coerceIn(0, 255); drawRot(c, pt[p.tex], p, smokePaint) }
                 1 -> { hotPaint.alpha = (230f * k * k).toInt().coerceIn(0, 255); drawRot(c, pt[p.tex], p, hotPaint) }
+                4 -> { dustPaint.alpha = (95f * k * smoothIn(age, 0.15f)).toInt().coerceIn(0, 255); drawRot(c, pt[p.tex], p, dustPaint) }
                 2 -> { bluePaint.alpha = (170f * k * k).toInt().coerceIn(0, 255); drawRot(c, pt[p.tex], p, bluePaint) }
                 else -> if (fire != null) { addPaint.alpha = (255f * k).toInt().coerceIn(0, 255); c.drawBitmap(fire, null, rect, addPaint) }
             }
@@ -1731,7 +1746,7 @@ class GameView(ctx: Context) : View(ctx) {
         when (evKind) {
             0 -> {
                 val w = width.toFloat()
-                if (dt > 0f && evT < 8.5f && Random.nextFloat() < dt * 2.2f && meteors.count { it.ev } < 5) {
+                if (dt > 0f && evT < EV_DUR - 3f && Random.nextFloat() < dt * 1.6f * evEnv() && meteors.count { it.ev } < 5) {
                     val a = 0.55f + Random.nextFloat() * 0.7f
                     val sp = w * (0.45f + Random.nextFloat() * 0.35f)
                     meteors.add(Meteor(Random.nextFloat() * w * 0.8f - w * 0.1f, -s * 2f + Random.nextFloat() * height * 0.25f,
@@ -1807,6 +1822,26 @@ class GameView(ctx: Context) : View(ctx) {
                 updateDrawPuffs(c, dt)
             }
             4 -> drawAurora(c, env)
+            6 -> {
+                // ventisca: ráfagas de polvo estelar que cruzan la pantalla en diagonal con fuerza variable
+                val gust = 0.6f + 0.4f * sin(time * 0.7f) * sin(time * 1.9f + 1f)
+                val w = width.toFloat()
+                if (dt > 0f) repeat((dt * 70f * env * gust).toInt() + if (Random.nextFloat() < dt * 30f * env) 1 else 0) {
+                    val v = w * (0.5f + 0.6f * gust) * (0.7f + Random.nextFloat() * 0.6f)
+                    addPuff(-s * 3f, Random.nextFloat() * height * 1.1f - height * 0.05f, v, v * 0.28f + (Random.nextFloat() - 0.5f) * s * 4f,
+                        w / v * 1.4f, s * (0.8f + Random.nextFloat() * 2.2f), 1.5f, if (Random.nextFloat() < 0.75f) 4 else 2)
+                }
+                updateDrawPuffs(c, dt)
+                val hz = haze
+                if (hz != null) {
+                    for (kk in 0 until 2) {
+                        val off = ((time * (0.25f + kk * 0.15f) * gust) % 1f) * w
+                        rect.set(off - w, 0f, off, height.toFloat()); addPaint.alpha = (110 * env).toInt()
+                        c.drawBitmap(hz, null, rect, addPaint)
+                        rect.set(off, 0f, off + w, height.toFloat()); c.drawBitmap(hz, null, rect, addPaint)
+                    }
+                }
+            }
             5 -> {
                 val sw = swirlTex
                 if (sw != null) {
@@ -1866,7 +1901,7 @@ class GameView(ctx: Context) : View(ctx) {
     private fun drawEclipse(c: Canvas) {
         val env = evEnv()
         val pr = planetR * planetSc
-        val sx2 = ccx - pr * 2.4f + pr * 4.8f * (evT / 10f)
+        val sx2 = ccx - pr * 2.4f + pr * 4.8f * (0.5f - 0.5f * cos((evT / EV_DUR) * PI.toFloat()))
         val cover = (1f - abs(sx2 - ccx) / (pr * 1.3f)).coerceIn(0f, 1f)
         val sh = shadowTex
         if (sh != null) {
@@ -1881,6 +1916,9 @@ class GameView(ctx: Context) : View(ctx) {
             objPaint.alpha = 255
             c.restore()
         }
+        paint.style = Paint.Style.FILL; paint.shader = null
+        paint.color = Color.argb((110 * env * cover).toInt(), 0, 0, 6)
+        c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
         val rg = ringTex
         if (rg != null && cover > 0f) {
             val r = pr / 0.9f

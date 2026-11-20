@@ -563,6 +563,84 @@ def regio(lib, band):
     return m.finish(wet=0.2, rt60=1.5, bass=0.22, room=True, sat=0.95)
 
 
+def mega_boom(lib, band):
+    """Explosión masiva del planeta: golpe grave, timbales, bombos, gong, platillos y retumbo largo que se aleja."""
+    k = band.kit
+    n = int(5.0 * SR)
+    x = np.zeros(n)
+    t = np.arange(n) / SR
+    # retumbo: ruido grave filtrado con caída lenta
+    rum = lowpass(RNG.normal(0, 1, n), 140) * np.exp(-t / 1.6) * 3.0
+    sub = np.sin(2 * np.pi * np.cumsum(30 + 50 * np.exp(-t / 0.25)) / SR) * np.exp(-t / 1.1) * 0.9
+    x += rum + sub
+    for sig, g, d in ((k.get("kick", 1.0), 1.2, 0), (k.get("kick", 1.0), 0.9, 0.03), (lib.timp_lo, 1.0, 0.0), (lib.timp_roll, 0.5, 0.15),
+                      (lib.crash, 0.6, 0.02), (k.get("crash", 1.0), 0.5, 0.05), (lib.gong, 0.7, 0.0), (k.get("t3", 1.0), 0.8, 0.06)):
+        st = int(d * SR); seg = sig[: n - st]
+        x[st:st + len(seg)] += seg * g
+    # crepitar de escombros
+    for _ in range(40):
+        st = int(RNG.uniform(0.1, 3.0) * SR)
+        cr = mm.shaker(0.05) * RNG.uniform(0.1, 0.35) * np.exp(-(st / SR) / 1.5)
+        x[st:st + len(cr)] += cr[: n - st]
+    x *= np.minimum(1, (n - np.arange(n)) / (0.4 * SR))
+    return np.tanh(x / np.max(np.abs(x)) * 2.0) * 0.95
+
+
+def rock_live(lib, band):
+    """Tema "Rock" como banda en vivo: hard rock a 138 BPM con batería real, dos guitarras grabadas, bajo y solo."""
+    k = band.kit
+    bpm = 138
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    m = Mix(32 * bar, tail=3.0)
+    n = len(m.L)
+    E, C, G, D, A, B = 40, 36, 43, 38, 45, 47
+    verse = [(E, MIN), (C, MAJ), (G, MAJ), (D, MAJ)]
+    bridge = [(A, MIN), (C, MAJ), (D, MAJ), (B, MAJ)]
+    prog = verse * 4 + bridge * 2 + verse * 2
+    gl = np.zeros(n); gr = np.zeros(n); bass = np.zeros(n); drums = np.zeros(n); lead = np.zeros(n)
+    hum = lambda: RNG.uniform(-0.006, 0.006)
+    for b, (root, q) in enumerate(prog):
+        t0 = b * bar
+        r = root if root >= 40 else root + 12
+        pc = [r, r + 7, r + 12]
+        intro = b < 2
+        for x in range(8):
+            mute = x in (1, 3, 5, 6) and b < 16
+            d = beat * (0.18 if mute else 0.9)
+            inst = band.egtr_m if mute else band.egtr
+            if not intro or x == 0:
+                chord_gtr(inst, gl, t0 + x * beat / 2 + hum(), pc, d, 0.9)
+                chord_gtr(inst, gr, t0 + x * beat / 2 + 0.012 + hum(), pc, d, 0.85)
+            if not intro:
+                place(bass, t0 + x * beat / 2 + hum(), band.ebass.note(root - 12 if root > 40 else root, beat * 0.45, att=0.003, rel=0.06), 0.85)
+        if not intro:
+            for x in range(8):
+                place(drums, t0 + x * beat / 2 + hum(), k.get("hh" if b < 16 else "ride", 0.5 + 0.35 * (x % 2 == 0)), 0.45)
+            for bt in (0, 1.5, 2, 2.75):
+                place(drums, t0 + bt * beat + hum(), k.get("kick", 0.95), 1.0)
+            place(drums, t0 + beat + hum(), k.get("snare", 0.95), 0.9)
+            place(drums, t0 + 3 * beat + hum(), k.get("snare", 1.0), 0.95)
+            if b % 4 == 3:
+                for x, tom in enumerate(["t1", "t1", "t2", "t2", "t3", "t3", "t3", "snare"]):
+                    place(drums, t0 + 2 * beat + x * beat / 4, k.get(tom, 0.85, 0.9), 0.8)
+            if b % 4 == 0:
+                place(drums, t0, k.get("crash", 1.0), 0.75)
+        else:
+            place(drums, t0, k.get("crash", 0.9), 0.7)
+    phrase = [(64, 0, 1), (67, 1, 1), (71, 2, 2), (69, 4, 1), (67, 5, 1), (66, 6, 2), (64, 8, 1), (67, 9, 1), (71, 10, 1),
+              (74, 11, 1), (76, 12, 3), (74, 15, 1)]
+    for base in (16, 20, 24, 28):
+        for nn, bt, d in phrase:
+            place(lead, base * bar + bt * beat, band.egtr.note(nn, d * beat + 0.15, att=0.003, rel=0.25), 1.0)
+    m.add(0, dip(mm.amp(highpass(gl, 110), drive=8.0, cut=5200), 400, -5), 0.17, pan=-0.85)
+    m.add(0, dip(mm.amp(highpass(gr, 110), drive=8.0, cut=5200), 400, -5), 0.17, pan=0.85)
+    m.add(0, mm.amp(lead, drive=10.0, cut=5600), 0.24, pan=0.1)
+    m.add(0, np.tanh(lowpass(bass, 1800) * 2.0) * 0.6, 0.8)
+    m.add(0, drums, 1.15)
+    return m.finish(wet=0.3, rt60=2.2, bass=0.15, room=True, sat=0.95)
+
+
 def brighten(st, amt=0.7):
     """Presencia y aire (realce sobre 3 kHz) tras la mezcla."""
     out = st.copy()
@@ -692,6 +770,10 @@ if __name__ == "__main__":
         mm.save(brighten(neutron(lib, band), 0.8), out, "theme_neutron")
     if what in ("all", "duro"):
         mm.save(brighten(duro(lib, band), 0.8), out, "theme_duro")
+    if what in ("all", "rock"):
+        mm.save(brighten(rock_live(lib, band), 0.9), out, "theme_rock")
+    if what in ("all", "megaboom"):
+        mm.save_wav_mono(mega_boom(lib, band), out, "intro_boom")
     if what in ("all", "regio"):
         mm.save(brighten(regio(lib, band), 0.7), out, "theme_regio")
     if what in ("all", "coro"):

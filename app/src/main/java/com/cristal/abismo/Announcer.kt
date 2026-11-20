@@ -29,13 +29,17 @@ class Announcer(private val ctx: Context) {
         val PHRASES = arrayOf(
             "¡Línea!", "¡Doble línea!", "¡Triple línea!", "¡Devastación!",
             "¡Racha!", "¡Frenesí!", "¡Imparable!", "¡Arrasador!", "¡Intocable!", "¡Invencible!",
-            "¡Detonación!", "¡Demolición!", "¡Al límite!", "¡Nuevo récord!", "¡Ascenso!"
+            "¡Detonación!", "¡Demolición!", "¡Al límite!", "¡Nuevo récord!", "¡Ascenso!",
+            "¡Otra línea!", "¡Excelente!", "¡Sigue así!", "¡Brutal!",
+            "¡Cinco líneas!", "¡Diez líneas!", "¡Quince líneas!", "¡Veinte líneas!", "¡Treinta líneas!", "¡Cincuenta líneas!"
         )
         const val LINE = 0; const val DOUBLE = 1; const val TRIPLE = 2; const val DEVAST = 3
         const val SPREE = 4; const val FRENZY = 5; const val UNSTOP = 6; const val RAMPAGE = 7
         const val UNTOUCH = 8; const val INVINC = 9; const val DETON = 10; const val DEMOL = 11
         const val LIMIT = 12; const val RECORD = 13; const val PROMO = 14
-        private const val VER = "v3"
+        const val OTHER = 15; const val GREAT = 16; const val KEEP = 17; const val BRUTAL = 18
+        val MILESTONES = mapOf(5 to 19, 10 to 20, 15 to 21, 20 to 22, 30 to 23, 50 to 24)
+        private const val VER = "v4"
     }
 
     var enabled = true
@@ -68,8 +72,8 @@ class Announcer(private val ctx: Context) {
             if (chosen == null) { t.shutdown(); return }
             t.language = chosen
             pickMaleVoice(t, chosen)
-            t.setPitch(0.64f)
-            t.setSpeechRate(0.9f)
+            t.setPitch(0.6f)
+            t.setSpeechRate(0.86f)
             for (i in PHRASES.indices) {
                 val raw = File(dir, "vox_raw_$i.wav")
                 val latch = CountDownLatch(1)
@@ -168,7 +172,7 @@ class Announcer(private val ctx: Context) {
             lp += al * (x - lp)
             b1 += a1 * (x - b1); b2 += a2 * (x - b2)
             val presence = b2 - b1
-            y[i] = x + 0.35f * lp + 0.55f * presence
+            y[i] = x + 0.4f * lp + 0.75f * presence
         }
         // normalizar y comprimir
         var pk = 1e-6f
@@ -180,8 +184,8 @@ class Announcer(private val ctx: Context) {
             val av = abs(v)
             env = if (av > env) att * env + (1 - att) * av else rel * env + (1 - rel) * av
             val thr = 0.35f
-            val gain = if (env > thr) (thr + (env - thr) / 2.5f) / env else 1f
-            y[i] = tanh(v * gain * 1.5f) / tanh(1.5f)
+            val gain = if (env > thr) (thr + (env - thr) / 3.5f) / env else 1f
+            y[i] = tanh(v * gain * 2.1f) / tanh(2.1f)
         }
         // reverberación de sala corta (Schroeder: 4 peines + 2 pasa-todo)
         val wet = FloatArray(y.size)
