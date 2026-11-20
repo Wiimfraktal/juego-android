@@ -53,6 +53,7 @@ class GameView(ctx: Context) : View(ctx) {
         const val LIFT_LOCKED = 0.30f
         const val LIFT_PIECE = 0.55f
         const val EXPLOSION_TIME = 3.5f
+        const val CELEB = 1.7f
         const val HOLD = 0.9f      // la cámara se queda cerca mientras explota
         const val PULL = 2.5f      // duración del alejamiento
         const val MENU_SC = 1.9f
@@ -65,6 +66,7 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private val skins = Skins.all
+    private val factions = Factions.all
     private val tips = arrayOf(
         "Arrastra la nave en círculo para rodearla alrededor del centro y colocarla donde quieras.",
         "Completa una línea para destruir las naves enteras que la forman.",
@@ -168,6 +170,18 @@ class GameView(ctx: Context) : View(ctx) {
     private var skinSel = try { prefs.getInt("skin", 0).coerceIn(0, skins.size - 1) } catch (e: Exception) { 0 }
     private var owned = try { prefs.getInt("owned", 1) or 1 } catch (e: Exception) { 1 }
     private var preview = skinSel
+    private var shipSel = try { prefs.getInt("ship", 0).coerceIn(0, Factions.all.size - 1) } catch (e: Exception) { 0 }
+    private var shipOwned = try { prefs.getInt("shipOwned", 1) or 1 } catch (e: Exception) { 1 }
+    private var previewShip = shipSel
+    private var subTab = 0
+    private val subRect0 = RectF()
+    private val subRect1 = RectF()
+    @Volatile private var shipBusy = false
+    private val shipThumbs = arrayOfNulls<Bitmap>(Factions.all.size)
+    private var flameA: Bitmap? = null
+    private var flameB: Bitmap? = null
+    private var totalBars = try { prefs.getInt("tbars", 0) } catch (e: Exception) { 0 }
+    private var rankStart = 0
     private var carouselOff = 0f
     private var msg = ""
     private var msgT = 0f
@@ -255,6 +269,7 @@ class GameView(ctx: Context) : View(ctx) {
         phase = if (loaded) 0 else -1; phaseT = 0f; tab = 0
         preview = skinSel
         seenIngots = 0; seenBars = 0; dispFrac = 0f; seenLocks = 0
+        rankStart = Ranks.indexFor(totalBars)
         settingsOpen = false
         settingsAnim = 0f; pauseAnim = 0f; tabT = 1f; celebT = 0f
         newRecord = false; overHandled = false
@@ -276,6 +291,8 @@ class GameView(ctx: Context) : View(ctx) {
         closeRect.set(w / 2f - u * 2.2f, panelRect.bottom - u * 1.8f, w / 2f + u * 2.2f, panelRect.bottom - u * 0.6f)
         escapeRect.set(w / 2f - u * 3.6f, h * 0.80f, w / 2f + u * 3.6f, h * 0.80f + u * 1.6f)
         val tb = topInset + u * 0.45f
+        subRect0.set(u * 0.4f, topInset + u * 4.1f, w / 2f - u * 0.1f, topInset + u * 4.95f)
+        subRect1.set(w / 2f + u * 0.1f, topInset + u * 4.1f, w - u * 0.4f, topInset + u * 4.95f)
         val mid = (u * 0.4f + (w - u * 1.65f)) / 2f
         tabRect0.set(u * 0.4f, tb, mid - u * 0.1f, tb + u * 0.95f)
         tabRect1.set(mid + u * 0.1f, tb, w - u * 1.65f, tb + u * 0.95f)
@@ -313,7 +330,10 @@ class GameView(ctx: Context) : View(ctx) {
         edgeShaders[3] = LinearGradient(w.toFloat(), 0f, w - th, 0f, red, none, Shader.TileMode.CLAMP)
 
         if (glows == null) {
-            glows = Array(7) { Textures.makeGlow(BASE[it]) }
+            val f0 = Factions.all[shipSel]
+            glows = Array(7) { Textures.makeGlow(f0.accent(BASE[it])) }
+            flameA = Textures.makeGlow(f0.flameA)
+            flameB = Textures.makeGlow(f0.flameB)
             sprWhite = Textures.makeGlow(Color.rgb(255, 245, 225))
             sprFire = Textures.makeGlow(Color.rgb(255, 150, 50))
             sprRed = Textures.makeGlow(Color.rgb(255, 60, 40))
@@ -362,6 +382,24 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
+    private fun makeShipThumb(i: Int): Bitmap {
+        val f = Factions.all[i]
+        val acc = f.accent(BASE[2])
+        val cs = 96
+        val bmp = Bitmap.createBitmap(cs * 3, cs * 2, Bitmap.Config.ARGB_8888)
+        val cv = Canvas(bmp)
+        val pt = Paint(Paint.FILTER_BITMAP_FLAG)
+        val masks = intArrayOf(2, 14, 8, 1)
+        val pos = arrayOf(intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(2, 0), intArrayOf(1, 1))
+        val rc = RectF()
+        for (k in 0 until 4) {
+            val tile = Textures.makeShip(acc, 2 * 17 + 3, masks[k], f)
+            rc.set((pos[k][0] * cs).toFloat(), (pos[k][1] * cs).toFloat(), ((pos[k][0] + 1) * cs).toFloat(), ((pos[k][1] + 1) * cs).toFloat())
+            cv.drawBitmap(tile, null, rc, pt)
+        }
+        return bmp
+    }
+
     /** Prepara todo antes del menú (disco si ya existe, si no se genera) y reporta el avance. */
     private fun startLoading() {
         if (loading) return
@@ -371,8 +409,8 @@ class GameView(ctx: Context) : View(ctx) {
         val thumbR = (u * 1.3f).toInt()
         val dir = context.cacheDir
         Thread {
-            // pesos del avance: planeta equipado 3, naves 3, rocas y lunas 1, otras skins 1.5 c/u
-            val total = 3f + 3f + 1f + 1.5f * (skins.size - 1)
+            // pesos del avance: planeta equipado 3, naves 3, rocas 1, vistas de naves 1, otras superficies 1.5 c/u
+            val total = 3f + 3f + 1f + 1f + 1.5f * (skins.size - 1)
             var done = 0f
             fun step(w: Float) { done += w; progress = min(1f, done / total) }
             fun skin(i: Int, w: Float) {
@@ -383,10 +421,13 @@ class GameView(ctx: Context) : View(ctx) {
                 step(w)
             }
             skin(skinSel, 3f)
-            ships = DiskCache.loadShips(dir, BASE.size * 16)
-                ?: Textures.makeShipTiles(BASE).also { DiskCache.saveShips(dir, it) }
+            val f0 = Factions.all[shipSel]
+            ships = DiskCache.loadShips(dir, BASE.size * 16, shipSel)
+                ?: Textures.makeShipTiles(BASE, f0).also { DiskCache.saveShips(dir, it, shipSel) }
             step(3f)
             rocks = Array(5) { Textures.makeRock(96, it * 7 + 1) }
+            step(1f)
+            for (i in Factions.all.indices) shipThumbs[i] = makeShipThumb(i)
             step(1f)
             for (i in skins.indices) if (i != skinSel) skin(i, 1.5f)
             progress = 1f
@@ -441,7 +482,7 @@ class GameView(ctx: Context) : View(ctx) {
             if (celebT <= 0f) g.update(dt)
             consumeBursts(g)
             consumeIron(g)
-            if (g.locks > seenLocks) { seenLocks = g.locks; sfx.place() }
+            if (g.locks > seenLocks) { seenLocks = g.locks; sfx.place(Factions.all[shipSel].sfx) }
             if (celebT <= 0f) emitThrust(g)
             if (celebT > 0f) emitWeld(dt)
             updateBar(g, dt)
@@ -554,9 +595,11 @@ class GameView(ctx: Context) : View(ctx) {
             try { prefs.edit().putInt("ingots", totalIngots).apply() } catch (e: Exception) { }
         }
         if (g.barsFilled > seenBars) {
+            totalBars += g.barsFilled - seenBars
+            try { prefs.edit().putInt("tbars", totalBars).apply() } catch (e: Exception) { }
             seenBars = g.barsFilled
             barFlash = 1f
-            celebT = 1.3f
+            celebT = CELEB
             dispFrac = 0f
         }
         val frac = g.barProgress / g.barNeed().toFloat()
@@ -595,8 +638,8 @@ class GameView(ctx: Context) : View(ctx) {
     /** Estela de motor detrás de cada nave (hacia el planeta). */
     private fun emitThrust(g: Game) {
         val p = g.piece ?: return
-        val fi = sprFire ?: return
-        val rd = sprRed ?: return
+        val fi = flameA ?: return
+        val rd = flameB ?: return
         for (c in p.cells) {
             var covered = false
             for (o in p.cells) if (o[0] == c[0] - g.gx && o[1] == c[1] - g.gy) covered = true
@@ -932,8 +975,8 @@ class GameView(ctx: Context) : View(ctx) {
     private fun drawGhost(c: Canvas, g: Game) {
         val p = g.piece ?: return
         val col = BASE[p.type]
-        val bx = Math.round(p.fx)
-        val by = Math.round(p.fy)
+        val bx = p.px
+        val by = p.py
         for (cell in p.cells) {
             val x = ox + (bx + cell[0]) * s
             val y = oy + (by + cell[1]) * s
@@ -1000,16 +1043,19 @@ class GameView(ctx: Context) : View(ctx) {
         }
         var avgx = 0f; var avgy = 0f
         for (cell in p.cells) { avgx += cell[0]; avgy += cell[1] }
-        val mx = p.fx + avgx / 4f + 0.5f + g.gx * 2.8f
-        val my = p.fy + avgy / 4f + 0.5f + g.gy * 2.8f
+        val gl = hypot(g.gx.toFloat(), g.gy.toFloat())
+        val ux = g.gx / gl
+        val uy = g.gy / gl
+        val mx = p.fx + avgx / 4f + 0.5f + ux * 2.8f
+        val my = p.fy + avgy / 4f + 0.5f + uy * 2.8f
         val ax = ox + mx * s
         val ay = oy + my * s
         paint.color = Color.argb(150, 255, 255, 255)
         path.reset()
         val a = s * 0.4f
-        path.moveTo(ax + g.gx * a, ay + g.gy * a)
-        path.lineTo(ax - g.gx * a + g.gy * a, ay - g.gy * a + g.gx * a)
-        path.lineTo(ax - g.gx * a - g.gy * a, ay - g.gy * a - g.gx * a)
+        path.moveTo(ax + ux * a, ay + uy * a)
+        path.lineTo(ax - ux * a + uy * a, ay - uy * a + ux * a)
+        path.lineTo(ax - ux * a - uy * a, ay - uy * a - ux * a)
         path.close()
         c.drawPath(path, paint)
         drawShips(c, xs, ys, ts, ms, 4, offX, offY, LIFT_PIECE, 190)
@@ -1109,14 +1155,14 @@ class GameView(ctx: Context) : View(ctx) {
     private fun emitWeld(dt: Float) {
         val wh = sprWhite ?: return
         val fi = sprFire ?: return
-        val ck = 1f - celebT / 1.3f
+        val ck = 1f - celebT / CELEB
         val cy = (barY0 + barY1) / 2f
         val hh = (barY1 - barY0) / 2f * (1f + 0.22f * sin(PI.toFloat() * min(1f, ck * 1.5f)))
         for (i in 0 until 3) {
             perimeterPoint(barX0, cy - hh, barX1, cy + hh, ck * 1.6f + i / 3f, weldPt)
-            repeat(2) {
+            repeat(3) {
                 val a = Random.nextFloat() * 6.283f
-                val v = u * (0.8f + Random.nextFloat() * 2.2f)
+                val v = u * (0.8f + Random.nextFloat() * 3.2f)
                 sparks.add(Spark(weldPt[0], weldPt[1], cos(a) * v, sin(a) * v - u * 0.6f, 0.35f, 0.35f,
                     if (it == 0) wh else fi, u * (0.05f + Random.nextFloat() * 0.06f)))
             }
@@ -1127,6 +1173,31 @@ class GameView(ctx: Context) : View(ctx) {
     private fun drawWeld(c: Canvas, ck: Float, pulseE: Float, bsx: Float, bsy: Float) {
         val wh = sprWhite ?: return
         val fi = sprFire ?: return
+        val fade0 = (1f - ck).coerceIn(0f, 1f)
+        // destello radial con rayos y ola de luz que recorre la barra
+        val mx = (barX0 + barX1) / 2f
+        val my = (barY0 + barY1) / 2f
+        val fl = sin(PI.toFloat() * min(1f, ck * 1.3f)).coerceAtLeast(0f)
+        var rr = u * 4.2f * (0.5f + 0.5f * fl)
+        rect.set(mx - rr, my - rr, mx + rr, my + rr)
+        addPaint.alpha = (150 * fl).toInt().coerceIn(0, 255)
+        c.drawBitmap(wh, null, rect, addPaint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.strokeWidth = u * 0.06f
+        for (i in 0 until 8) {
+            val ang = i * PI.toFloat() / 4f + ck * 1.2f
+            paint.color = Color.argb((130 * fl).toInt().coerceIn(0, 255), 255, 235, 190)
+            c.drawLine(mx + cos(ang) * u * 0.8f, my + sin(ang) * u * 0.8f * 0.5f, mx + cos(ang) * rr * 0.9f, my + sin(ang) * rr * 0.9f * 0.5f, paint)
+        }
+        paint.style = Paint.Style.FILL
+        val sweepX = barX0 + (barX1 - barX0) * (ck * 1.7f).coerceIn(0f, 1f)
+        if (ck < 0.6f) {
+            rr = u * 1.0f
+            rect.set(sweepX - rr, barY0 - u * 0.3f, sweepX + rr, barY1 + u * 0.3f)
+            addPaint.alpha = (200 * (1f - ck / 0.6f)).toInt().coerceIn(0, 255)
+            c.drawBitmap(wh, null, rect, addPaint)
+        }
         val cx = (barX0 + barX1) / 2f
         val cy = (barY0 + barY1) / 2f
         val hw = (barX1 - barX0) / 2f * bsx
@@ -1358,6 +1429,7 @@ class GameView(ctx: Context) : View(ctx) {
         paint.textSize = u * 0.42f
         paint.color = Color.argb((210 * a).toInt(), 190, 215, 255)
         c.drawText("Aleja las naves del centro antes de que lleguen", width / 2f, topInset + u * 3.9f, paint)
+        drawRankBlock(c, a)
         paint.color = Color.argb((220 * a).toInt(), 255, 255, 255)
         c.drawText("Récord: $best      Lingotes: $totalIngots", width / 2f, escapeRect.top - u * 0.7f, paint)
         val pulse = 0.5f + 0.5f * sin(time * 3f)
@@ -1376,31 +1448,74 @@ class GameView(ctx: Context) : View(ctx) {
 
     private fun cardX(i: Int) = u * 0.4f + carouselOff + i * (cardW + gap)
 
+    private fun shopCount() = if (subTab == 0) skins.size else factions.size
+    private fun shopOwned(i: Int) = if (subTab == 0) (owned shr i) and 1 == 1 else (shipOwned shr i) and 1 == 1
+    private fun shopSel() = if (subTab == 0) skinSel else shipSel
+    private fun shopPreview() = if (subTab == 0) preview else previewShip
+    private fun shopName(i: Int) = if (subTab == 0) skins[i].name else factions[i].name
+    private fun shopPrice(i: Int) = if (subTab == 0) skins[i].price else factions[i].price
+    private fun shopThumb(i: Int): Bitmap? = if (subTab == 0) thumbs[i] else shipThumbs[i]
+
     private fun clampCarousel() {
-        val total = skins.size * (cardW + gap) - gap + u * 0.8f
+        val total = shopCount() * (cardW + gap) - gap + u * 0.8f
         val minOff = min(0f, width - total)
         carouselOff = carouselOff.coerceIn(minOff, 0f)
     }
 
-    private fun isOwned(i: Int) = (owned shr i) and 1 == 1
+    private fun switchSub(n: Int) {
+        if (n == subTab) return
+        subTab = n
+        carouselOff = 0f
+        clampCarousel()
+    }
 
     private fun drawSkinTab(c: Canvas, a: Float) {
         paint.style = Paint.Style.FILL
         paint.textAlign = Paint.Align.CENTER
         paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
         paint.textSize = u * 0.62f
-        c.drawText("Superficies de planeta", width / 2f, topInset + u * 2.6f, paint)
+        c.drawText(if (subTab == 0) "Superficies de planeta" else "Modelos de nave", width / 2f, topInset + u * 2.6f, paint)
         paint.textSize = u * 0.5f
         val label = "$totalIngots"
         val tw = paint.measureText(label)
         drawIngot(c, width / 2f - tw / 2f - u * 0.5f, topInset + u * 3.35f, u * 0.7f)
         c.drawText(label, width / 2f + u * 0.2f, topInset + u * 3.55f, paint)
-        if (cache[preview] == null) {
+        // sub-pestañas
+        for (i in 0..1) {
+            val r = if (i == 0) subRect0 else subRect1
+            val sel = subTab == i
+            paint.style = Paint.Style.FILL
+            paint.color = if (sel) Color.argb(235, 56, 92, 176) else Color.argb(150, 10, 14, 34)
+            c.drawRoundRect(r, u * 0.4f, u * 0.4f, paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 2f
+            paint.color = Color.argb(if (sel) 220 else 110, 170, 200, 255)
+            c.drawRoundRect(r, u * 0.4f, u * 0.4f, paint)
+            paint.style = Paint.Style.FILL
+            paint.color = Color.WHITE
+            paint.textSize = u * 0.4f
+            c.drawText(if (i == 0) "Superficies" else "Naves", r.centerX(), r.centerY() + u * 0.14f, paint)
+        }
+        if (subTab == 0 && cache[preview] == null) {
             paint.textSize = u * 0.4f
             paint.color = Color.argb(220, 200, 220, 255)
             c.drawText("Cargando vista previa...", width / 2f, cardsTop - u * 0.5f, paint)
         }
-        for (i in skins.indices) {
+        if (subTab == 1) {
+            val tb = shipThumbs[previewShip]
+            if (tb != null) {
+                val pw = u * 8.4f
+                val ph = pw * 2f / 3f
+                rect.set(ccx - pw / 2f, ccy - ph / 2f, ccx + pw / 2f, ccy + ph / 2f)
+                c.drawBitmap(tb, null, rect, bmpPaint)
+            }
+            if (shipBusy) {
+                paint.textSize = u * 0.4f
+                paint.color = Color.argb(230, 255, 225, 150)
+                c.drawText("Aplicando modelo...", width / 2f, cardsTop - u * 0.5f, paint)
+            }
+        }
+        for (i in 0 until shopCount()) {
             val x = cardX(i)
             if (x + cardW < 0f || x > width) continue
             rect.set(x, cardsTop, x + cardW, cardsTop + cardH)
@@ -1408,15 +1523,16 @@ class GameView(ctx: Context) : View(ctx) {
             paint.color = Color.argb(205, 10, 14, 34)
             c.drawRoundRect(rect, u * 0.35f, u * 0.35f, paint)
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = if (preview == i) 4f else 2f
-            paint.color = if (preview == i) Color.rgb(130, 195, 255) else Color.argb(110, 170, 200, 255)
+            paint.strokeWidth = if (shopPreview() == i) 4f else 2f
+            paint.color = if (shopPreview() == i) Color.rgb(130, 195, 255) else Color.argb(110, 170, 200, 255)
             c.drawRoundRect(rect, u * 0.35f, u * 0.35f, paint)
             val sz = cardW * 0.66f
             val cx = x + cardW / 2f
             val cy = cardsTop + cardW * 0.46f
-            val tb = thumbs[i]
+            val tb = shopThumb(i)
             if (tb != null) {
-                rect.set(cx - sz / 2f, cy - sz / 2f, cx + sz / 2f, cy + sz / 2f)
+                if (subTab == 0) rect.set(cx - sz / 2f, cy - sz / 2f, cx + sz / 2f, cy + sz / 2f)
+                else rect.set(cx - sz / 2f * 1.15f, cy - sz / 3f * 1.15f, cx + sz / 2f * 1.15f, cy + sz / 3f * 1.15f)
                 c.drawBitmap(tb, null, rect, bmpPaint)
             } else {
                 paint.style = Paint.Style.FILL
@@ -1425,30 +1541,30 @@ class GameView(ctx: Context) : View(ctx) {
             }
             paint.style = Paint.Style.FILL
             paint.color = Color.WHITE
-            paint.textSize = u * 0.4f
-            c.drawText(skins[i].name, cx, cardsTop + cardW * 0.98f, paint)
+            paint.textSize = u * (if (subTab == 0) 0.4f else 0.32f)
+            c.drawText(shopName(i), cx, cardsTop + cardW * 0.98f, paint)
             val ty = cardsTop + cardW * 1.18f
             paint.textSize = u * 0.34f
-            if (isOwned(i)) {
-                paint.color = if (skinSel == i) Color.rgb(120, 230, 150) else Color.argb(220, 200, 215, 240)
-                c.drawText(if (skinSel == i) "Equipada" else "Tuya", cx, ty, paint)
+            if (shopOwned(i)) {
+                paint.color = if (shopSel() == i) Color.rgb(120, 230, 150) else Color.argb(220, 200, 215, 240)
+                c.drawText(if (shopSel() == i) "Equipada" else "Tuya", cx, ty, paint)
             } else {
                 paint.color = Color.WHITE
-                val pl = "${skins[i].price}"
+                val pl = "${shopPrice(i)}"
                 val pw = paint.measureText(pl)
                 drawIngot(c, cx - pw / 2f - u * 0.3f, ty - u * 0.11f, u * 0.5f)
                 c.drawText(pl, cx + u * 0.15f, ty, paint)
             }
         }
-        // botón principal
-        val own = isOwned(preview)
-        val eq = preview == skinSel
-        val enough = totalIngots >= skins[preview].price
+        val pv = shopPreview()
+        val own = shopOwned(pv)
+        val eq = pv == shopSel()
+        val enough = totalIngots >= shopPrice(pv)
         val text: String
         val col: Int
         if (own && eq) { text = "Equipada"; col = Color.argb(160, 70, 90, 110) }
         else if (own) { text = "Equipar"; col = Color.rgb(50, 120, 200) }
-        else { text = "Comprar · ${skins[preview].price}"; col = if (enough) Color.rgb(40, 150, 90) else Color.rgb(150, 60, 60) }
+        else { text = "Comprar · ${shopPrice(pv)}"; col = if (enough) Color.rgb(40, 150, 90) else Color.rgb(150, 60, 60) }
         paint.style = Paint.Style.FILL
         paint.color = col
         c.drawRoundRect(buyRect, u * 0.45f, u * 0.45f, paint)
@@ -1464,25 +1580,167 @@ class GameView(ctx: Context) : View(ctx) {
 
     private fun say(t: String) { msg = t; msgT = 2f }
 
-    private fun actSkin() {
-        val i = preview
-        if (isOwned(i)) {
-            if (skinSel != i) equip(i)
+    private fun actShop() {
+        val i = shopPreview()
+        if (shopOwned(i)) {
+            if (shopSel() != i) equipCurrent(i)
         } else {
-            val price = skins[i].price
+            val price = shopPrice(i)
             if (totalIngots < price) { say("Te faltan ${price - totalIngots} lingotes"); return }
             totalIngots -= price
-            owned = owned or (1 shl i)
-            try { prefs.edit().putInt("ingots", totalIngots).putInt("owned", owned).apply() } catch (e: Exception) { }
-            equip(i)
-            say("Superficie comprada")
+            if (subTab == 0) owned = owned or (1 shl i) else shipOwned = shipOwned or (1 shl i)
+            try { prefs.edit().putInt("ingots", totalIngots).putInt("owned", owned).putInt("shipOwned", shipOwned).apply() } catch (e: Exception) { }
+            equipCurrent(i)
+            say(if (subTab == 0) "Superficie comprada" else "Modelo comprado")
         }
     }
+
+    private fun equipCurrent(i: Int) { if (subTab == 0) equip(i) else equipShip(i) }
 
     private fun equip(i: Int) {
         skinSel = i
         try { prefs.edit().putInt("skin", i).apply() } catch (e: Exception) { }
         requestSkin(i)
+    }
+
+    /** Cambia el aspecto de las naves: las placas de la facción se cargan del disco o se generan en segundo plano. */
+    private fun equipShip(i: Int) {
+        shipSel = i
+        try { prefs.edit().putInt("ship", i).apply() } catch (e: Exception) { }
+        val f = Factions.all[i]
+        val dir = context.cacheDir
+        shipBusy = true
+        Thread {
+            val tiles = DiskCache.loadShips(dir, BASE.size * 16, i)
+                ?: Textures.makeShipTiles(BASE, f).also { DiskCache.saveShips(dir, it, i) }
+            glows = Array(7) { Textures.makeGlow(f.accent(BASE[it])) }
+            flameA = Textures.makeGlow(f.flameA)
+            flameB = Textures.makeGlow(f.flameB)
+            ships = tiles
+            shipBusy = false
+            postInvalidate()
+        }.start()
+    }
+
+    // ---------- rangos ----------
+    private fun chevron(c: Canvas, cx: Float, cy: Float, w: Float, h: Float, th: Float) {
+        path.reset()
+        path.moveTo(cx - w, cy + h); path.lineTo(cx, cy); path.lineTo(cx + w, cy + h)
+        path.lineTo(cx + w, cy + h + th); path.lineTo(cx, cy + th); path.lineTo(cx - w, cy + h + th)
+        path.close()
+        c.drawPath(path, paint)
+    }
+
+    private fun star(c: Canvas, cx: Float, cy: Float, r: Float) {
+        path.reset()
+        for (i in 0 until 10) {
+            val ang = -PI.toFloat() / 2f + i * PI.toFloat() / 5f
+            val rr = if (i % 2 == 0) r else r * 0.42f
+            val px = cx + cos(ang) * rr
+            val py = cy + sin(ang) * rr
+            if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
+        }
+        path.close()
+        c.drawPath(path, paint)
+    }
+
+    /** Insignia del rango: escudo con galones, barras, estrellas, alas o corona según el grupo. */
+    private fun drawInsignia(c: Canvas, cx: Float, cy: Float, sz: Float, rk: Rank, a: Float = 1f) {
+        val pal = intArrayOf(
+            Color.rgb(150, 155, 165), Color.rgb(176, 120, 70), Color.rgb(190, 200, 215), Color.rgb(190, 200, 215),
+            Color.rgb(200, 205, 220), Color.rgb(230, 190, 70), Color.rgb(230, 190, 70), Color.rgb(230, 190, 70),
+            Color.rgb(120, 200, 240), Color.rgb(120, 200, 240), Color.rgb(180, 130, 255), Color.rgb(180, 130, 255),
+            Color.rgb(255, 100, 100), Color.rgb(255, 100, 100)
+        )
+        val col = if (rk.group < pal.size) pal[rk.group] else Color.rgb(90 + (rk.group * 37) % 160, 220, 255 - (rk.group * 23) % 120)
+        val al = (255 * a).toInt()
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb((200 * a).toInt(), 12, 16, 38)
+        c.drawCircle(cx, cy, sz * 0.5f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = sz * 0.05f
+        paint.color = Color.argb(al, Color.red(col), Color.green(col), Color.blue(col))
+        c.drawCircle(cx, cy, sz * 0.5f, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb(al, Color.red(col), Color.green(col), Color.blue(col))
+        val g = rk.group
+        val n = rk.grade
+        when {
+            g == 0 -> c.drawCircle(cx, cy, sz * 0.09f, paint)
+            g == 1 -> chevron(c, cx, cy - sz * 0.12f, sz * 0.26f, sz * 0.2f, sz * 0.1f)
+            g in 2..5 -> {
+                for (i in 0 until n) chevron(c, cx, cy - sz * 0.2f + i * sz * 0.14f, sz * 0.26f, sz * 0.16f, sz * 0.07f)
+                if (g >= 4) {
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = sz * 0.05f
+                    rect.set(cx - sz * 0.28f, cy + sz * 0.02f, cx + sz * 0.28f, cy + sz * 0.38f)
+                    c.drawArc(rect, 20f, 140f, false, paint)
+                    paint.style = Paint.Style.FILL
+                }
+            }
+            g in 6..7 -> for (i in 0 until n) {
+                rect.set(cx - sz * 0.26f, cy - sz * 0.2f + i * sz * 0.14f, cx + sz * 0.26f, cy - sz * 0.1f + i * sz * 0.14f)
+                c.drawRoundRect(rect, sz * 0.02f, sz * 0.02f, paint)
+            }
+            g in 8..9 -> for (i in 0 until n) star(c, cx + (i - (n - 1) / 2f) * sz * 0.3f, cy, sz * 0.16f)
+            g in 10..11 -> {
+                path.reset()
+                path.moveTo(cx - sz * 0.38f, cy - sz * 0.08f); path.lineTo(cx - sz * 0.08f, cy); path.lineTo(cx - sz * 0.3f, cy + sz * 0.16f)
+                path.moveTo(cx + sz * 0.38f, cy - sz * 0.08f); path.lineTo(cx + sz * 0.08f, cy); path.lineTo(cx + sz * 0.3f, cy + sz * 0.16f)
+                c.drawPath(path, paint)
+                for (i in 0 until n) star(c, cx + (i - (n - 1) / 2f) * sz * 0.2f, cy - sz * 0.1f, sz * 0.1f)
+            }
+            g in 12..13 -> {
+                for (i in 0 until n) star(c, cx + (i - (n - 1) / 2f) * sz * 0.22f, cy - sz * 0.14f, sz * 0.1f)
+                path.reset()
+                path.moveTo(cx - sz * 0.3f, cy + sz * 0.22f); path.lineTo(cx - sz * 0.3f, cy + sz * 0.02f); path.lineTo(cx - sz * 0.15f, cy + sz * 0.12f)
+                path.lineTo(cx, cy - sz * 0.02f); path.lineTo(cx + sz * 0.15f, cy + sz * 0.12f); path.lineTo(cx + sz * 0.3f, cy + sz * 0.02f)
+                path.lineTo(cx + sz * 0.3f, cy + sz * 0.22f); path.close()
+                c.drawPath(path, paint)
+            }
+            else -> {
+                star(c, cx, cy, sz * 0.3f)
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = sz * 0.03f
+                for (i in 0 until 8) {
+                    val ang = i * PI.toFloat() / 4f
+                    c.drawLine(cx + cos(ang) * sz * 0.34f, cy + sin(ang) * sz * 0.34f, cx + cos(ang) * sz * 0.46f, cy + sin(ang) * sz * 0.46f, paint)
+                }
+                paint.style = Paint.Style.FILL
+            }
+        }
+    }
+
+    private fun drawRankBlock(c: Canvas, a: Float) {
+        val idx = Ranks.indexFor(totalBars)
+        val rk = Ranks.all[idx]
+        val next = if (idx + 1 < Ranks.all.size) Ranks.all[idx + 1] else null
+        val cy = topInset + u * 6.4f
+        drawInsignia(c, width / 2f - u * 3.2f, cy, u * 1.9f, rk, a)
+        paint.style = Paint.Style.FILL
+        paint.textAlign = Paint.Align.LEFT
+        paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
+        paint.textSize = u * 0.62f
+        c.drawText(rk.name, width / 2f - u * 2.0f, cy - u * 0.1f, paint)
+        paint.textSize = u * 0.32f
+        paint.color = Color.argb((200 * a).toInt(), 190, 215, 255)
+        val bx0 = width / 2f - u * 2.0f
+        val bx1 = width / 2f + u * 4.0f
+        if (next != null) {
+            val frac = ((totalBars - rk.bars).toFloat() / (next.bars - rk.bars)).coerceIn(0f, 1f)
+            rect.set(bx0, cy + u * 0.15f, bx1, cy + u * 0.4f)
+            paint.color = Color.argb((150 * a).toInt(), 10, 12, 30)
+            c.drawRoundRect(rect, u * 0.12f, u * 0.12f, paint)
+            rect.set(bx0, cy + u * 0.15f, bx0 + (bx1 - bx0) * frac, cy + u * 0.4f)
+            paint.color = Color.argb((235 * a).toInt(), 120, 190, 255)
+            c.drawRoundRect(rect, u * 0.12f, u * 0.12f, paint)
+            paint.color = Color.argb((200 * a).toInt(), 190, 215, 255)
+            paint.textSize = u * 0.3f
+            c.drawText("Barras $totalBars / ${next.bars}  ·  siguiente: ${next.name}", bx0, cy + u * 0.82f, paint)
+        } else {
+            paint.textSize = u * 0.34f
+            c.drawText("Rango máximo · $totalBars barras", bx0, cy + u * 0.5f, paint)
+        }
     }
 
     private fun drawHud(c: Canvas, g: Game) {
@@ -1506,7 +1764,7 @@ class GameView(ctx: Context) : View(ctx) {
         rect.set(pauseRect.centerX() + u * 0.06f, top - u * 0.38f, pauseRect.centerX() + u * 0.17f, top - u * 0.02f)
         c.drawRoundRect(rect, u * 0.03f, u * 0.03f, paint)
 
-        val ck = if (celebT > 0f) 1f - celebT / 1.3f else 0f
+        val ck = if (celebT > 0f) 1f - celebT / CELEB else 0f
         val pulseE = if (celebT > 0f) sin(PI.toFloat() * min(1f, ck * 1.5f)) else 0f
         val bsx = 1f + 0.012f * pulseE
         val bsy = 1f + 0.22f * pulseE
@@ -1572,7 +1830,14 @@ class GameView(ctx: Context) : View(ctx) {
                 c.drawText(if (newRecord) "¡Nuevo récord! $best" else "Récord: $best", width / 2f, height / 2f + u * 0.5f, paint)
                 paint.color = Color.argb((255 * ta).toInt(), 255, 255, 255)
                 paint.textSize = u * 0.45f
-                c.drawText("Toca para volver", width / 2f, height / 2f + u * 1.7f, paint)
+                val nowIdx = Ranks.indexFor(totalBars)
+                val promoted = nowIdx > rankStart
+                paint.textSize = u * 0.5f
+                paint.color = if (promoted) Color.argb((255 * ta).toInt(), 255, 225, 100) else Color.argb((220 * ta).toInt(), 190, 215, 255)
+                c.drawText(if (promoted) "¡ASCENSO! ${Ranks.all[nowIdx].name}" else "Rango: ${Ranks.all[nowIdx].name}", width / 2f, height / 2f + u * 1.6f, paint)
+                paint.color = Color.argb((255 * ta).toInt(), 255, 255, 255)
+                paint.textSize = u * 0.45f
+                c.drawText("Toca para volver", width / 2f, height / 2f + u * 2.7f, paint)
             }
         }
     }
@@ -1653,11 +1918,16 @@ class GameView(ctx: Context) : View(ctx) {
                     if (tab == 0) {
                         if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
                     } else {
-                        if (buyRect.contains(sx, sy) && buyRect.contains(e.x, e.y)) actSkin()
+                        if (subRect0.contains(sx, sy) && subRect0.contains(e.x, e.y)) switchSub(0)
+                        else if (subRect1.contains(sx, sy) && subRect1.contains(e.x, e.y)) switchSub(1)
+                        else if (buyRect.contains(sx, sy) && buyRect.contains(e.x, e.y)) actShop()
                         else if (!moved && e.y > cardsTop && e.y < cardsTop + cardH) {
-                            for (i in skins.indices) {
+                            for (i in 0 until shopCount()) {
                                 val x = cardX(i)
-                                if (e.x >= x && e.x <= x + cardW) { preview = i; requestSkin(i) }
+                                if (e.x >= x && e.x <= x + cardW) {
+                                    if (subTab == 0) { preview = i; requestSkin(i) }
+                                    else { previewShip = i; sfx.place(factions[i].sfx) }
+                                }
                             }
                         }
                     }
@@ -1676,7 +1946,7 @@ class GameView(ctx: Context) : View(ctx) {
                     // la barra completada congela el juego un instante
                 } else if (!moved && dist < s * 0.6f && dt < 300) {
                     g.rotate()
-                } else if (dt < 180 && dist > s * 3f && (tx * g.gx + ty * g.gy) > 0.7f * dist) {
+                } else if (dt < 180 && dist > s * 3f && (tx * g.gx + ty * g.gy) > 0.7f * dist * hypot(g.gx.toFloat(), g.gy.toFloat())) {
                     g.hardDrop()
                 }
             }

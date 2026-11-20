@@ -93,30 +93,34 @@ class MusicPlayer(private val ctx: Context) {
     }
 }
 
-/** Efecto de sonido muy leve al fijar una nave. */
+/** Efectos de sonido muy leves al fijar una nave; cada facción usa el suyo. */
 class Sfx(ctx: Context) {
     var enabled = true
-    private var loaded = false
     private val pool: SoundPool? = try {
         SoundPool.Builder()
-            .setMaxStreams(3)
+            .setMaxStreams(4)
             .setAudioAttributes(AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
             .build()
     } catch (e: Exception) { null }
-    private var id = 0
+    private val ids = IntArray(7)
+    private val ok = BooleanArray(7)
 
     init {
         try {
-            pool?.setOnLoadCompleteListener { _, _, status -> loaded = status == 0 }
-            id = pool?.load(ctx, R.raw.place, 1) ?: 0
+            pool?.setOnLoadCompleteListener { _, sampleId, status ->
+                for (i in ids.indices) if (ids[i] == sampleId) ok[i] = status == 0
+            }
+            val raws = intArrayOf(R.raw.place_0, R.raw.place_1, R.raw.place_2, R.raw.place_3, R.raw.place_4, R.raw.place_5, R.raw.place_6)
+            for (i in raws.indices) ids[i] = pool?.load(ctx, raws[i], 1) ?: 0
         } catch (e: Exception) { }
     }
 
-    fun place() {
-        if (!enabled || !loaded) return
-        try { pool?.play(id, 0.35f, 0.35f, 1, 0, 1f) } catch (e: Exception) { }
+    fun place(kind: Int) {
+        val k = kind.coerceIn(0, 6)
+        if (!enabled || !ok[k]) return
+        try { pool?.play(ids[k], 0.35f, 0.35f, 1, 0, 1f) } catch (e: Exception) { }
     }
 
     fun release() { try { pool?.release() } catch (e: Exception) { } }

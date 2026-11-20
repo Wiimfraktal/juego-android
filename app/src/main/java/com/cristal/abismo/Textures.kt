@@ -57,8 +57,8 @@ object Textures {
 
     private fun cl(v: Float) = v.toInt().coerceIn(0, 255)
 
-    /** 7 tipos x 16 máscaras de vecinos (1 arriba, 2 derecha, 4 abajo, 8 izquierda). */
-    fun makeShipTiles(colors: IntArray): Array<Bitmap> {
+    /** 7 tipos x 16 máscaras de vecinos (1 arriba, 2 derecha, 4 abajo, 8 izquierda), con el aspecto de una facción. */
+    fun makeShipTiles(colors: IntArray, f: Faction): Array<Bitmap> {
         val n = colors.size * 16
         val out = arrayOfNulls<Bitmap>(n)
         val next = java.util.concurrent.atomic.AtomicInteger(0)
@@ -68,7 +68,7 @@ object Textures {
                 while (true) {
                     val i = next.getAndIncrement()
                     if (i >= n) break
-                    out[i] = makeShip(colors[i / 16], (i / 16) * 17 + 3, i % 16)
+                    out[i] = makeShip(f.accent(colors[i / 16]), (i / 16) * 17 + 3, i % 16, f)
                 }
             }.also { t -> t.start() }
         }
@@ -77,12 +77,12 @@ object Textures {
     }
 
     /**
-     * Sección de una nave enemiga. Los lados con vecino continúan el casco; los abiertos llevan borde,
-     * las esquinas se achaflanan y los extremos se afinan como proa. Según los vecinos hay lente,
-     * reactor, rejillas de motor o placa blindada, y una franja del color de la facción.
+     * Sección de nave con iluminación real: un campo de alturas (biseles, juntas de paneles, remaches, cúpulas)
+     * genera normales y se ilumina con difuso, especular, reflejo metálico y oclusión. Las luces son emisivas.
+     * Los lados con vecino continúan el casco; las puntas se afinan como proa y las esquinas se achaflanan.
      */
-    fun makeShip(col: Int, seed: Int, mask: Int): Bitmap {
-        val t = 64
+    fun makeShip(accent: Int, seed: Int, mask: Int, f: Faction): Bitmap {
+        val t = 64f
         val big = 128
         val px = IntArray(big * big)
         val up = mask and 1 != 0
@@ -98,7 +98,6 @@ object Textures {
         val iB = if (down) 0f else ins
         val k = if (nb <= 1) 9f else 6f
         val sd = seed.toFloat() + mask * 0.37f
-        val cr = Color.red(col).toFloat(); val cg = Color.green(col).toFloat(); val cb = Color.blue(col).toFloat()
         val h = t / 2f
         val rLens = when {
             nb == 4 -> 17f
@@ -108,9 +107,24 @@ object Textures {
             corner -> 6f
             else -> 0f
         }
-        for (y in 0 until big) for (x in 0 until big) {
-            val fx = (x + 0.5f) * t / big
-            val fy = (y + 0.5f) * t / big
+        val horiz = (left || right) && !(up || down)
+        val vert = (up || down) && !(left || right)
+        val acR = Color.red(accent).toFloat(); val acG = Color.green(accent).toFloat(); val acB = Color.blue(accent).toFloat()
+        val huR = Color.red(f.hull).toFloat(); val huG = Color.green(f.hull).toFloat(); val huB = Color.blue(f.hull).toFloat()
+        val lnR = Color.red(f.lens).toFloat(); val lnG = Color.green(f.lens).toFloat(); val lnB = Color.blue(f.lens).toFloat()
+        val wnR = Color.red(f.window).toFloat(); val wnG = Color.green(f.window).toFloat(); val wnB = Color.blue(f.window).toFloat()
+        val fbR = Color.red(f.flameB).toFloat(); val fbG = Color.green(f.flameB).toFloat(); val fbB = Color.blue(f.flameB).toFloat()
+        val ll = sqrt(0.5f * 0.5f + 0.6f * 0.6f + 0.62f * 0.62f)
+        val lx = -0.5f / ll; val ly = -0.6f / ll; val lz = 0.62f / ll
+        val hl = sqrt(lx * lx + ly * ly + (lz + 1f) * (lz + 1f))
+        val hx = lx / hl; val hy = ly / hl; val hz = (lz + 1f) / hl
+        val wins = arrayOf(
+            intArrayOf(17, 24), intArrayOf(77, 24), intArrayOf(17, 71), intArrayOf(77, 71),
+            intArrayOf(47, 17), intArrayOf(47, 78)
+        )
+        val lit = BooleanArray(wins.size) { Noise.n3(it * 1.7f, sd, 0.5f) > 0.38f }
+
+        fun silDist(fx: Float, fy: Float): Float {
             var d = 1000f
             if (!left) d = min(d, fx - iL)
             if (!right) d = min(d, (t - iR) - fx)
@@ -130,72 +144,128 @@ object Textures {
                 val half = 1f - 0.55f * a.pow(1.4f)
                 d = min(d, (half - abs(l)) * h)
             }
-            if (d <= -1f) continue
-            val alpha = ((d + 1f) / 1.5f).coerceIn(0f, 1f)
+            return d
+        }
 
-            val u = fx / t
-            val v = fy / t
-            val n = Noise.fbm(fx * 0.05f, fy * 0.3f, sd, 3)
-            val grain = Noise.fbm(fx * 0.7f, fy * 0.7f, sd + 9f, 2)
-            var lum = (1.2f - 0.65f * ((u + v) / 2f)) * (0.75f + 0.4f * n) * (0.9f + 0.2f * grain)
-            // desgaste: vetas de suciedad, oclusión en el borde de cada panel y rayones
-            lum *= 0.82f + 0.36f * Noise.fbm(fx * 0.9f, fy * 0.05f, sd + 4f, 3)
-            val pe = min(min(fx % 32f, 32f - fx % 32f), min(fy % 32f, 32f - fy % 32f))
-            lum *= 0.78f + 0.22f * smooth(0f, 5f, pe)
-            if (Noise.fbm(fx * 0.4f + 50f, fy * 1.6f, sd, 2) > 0.72f) lum *= 1.35f
-            var r = 66f * lum; var g = 74f * lum; var b = 92f * lum
-
-            // costuras de paneles
-            if (d > 6f && ((fx.toInt() % 32) < 1 || (fy.toInt() % 32) < 1)) { r *= 0.55f; g *= 0.55f; b *= 0.6f }
-            // remaches
+        fun hgt(fx: Float, fy: Float): Float {
+            val d = silDist(fx, fy)
+            var hh = 0.55f * smooth(0f, 4.5f, d) + 0.45f * smooth(0f, 12f, d)
+            if (d > 6f) {
+                val sxm = fx % 32f; val sym = fy % 32f
+                val gd = min(min(sxm, 32f - sxm), min(sym, 32f - sym))
+                hh -= 0.22f * (1f - smooth(0.4f, 1.8f, gd))
+            }
             if (d > 8f) {
                 for (rv in 0 until 4) {
                     val rx = if (rv % 2 == 0) 9f else 55f
                     val ry = if (rv < 2) 9f else 55f
                     val dd = sqrt((fx - rx) * (fx - rx) + (fy - ry) * (fy - ry))
-                    if (dd < 2.2f) { val f = if (fx + fy < rx + ry) 1.6f else 0.6f; r *= f; g *= f; b *= f }
-                    else if (dd < 3f) { r *= 0.5f; g *= 0.5f; b *= 0.5f }
+                    hh += 0.25f * (1f - smooth(1.5f, 3.2f, dd))
                 }
             }
-            // franja de facción
-            val horiz = (left || right) && !(up || down)
-            val vert = (up || down) && !(left || right)
+            if (rLens > 0f) {
+                val cd = sqrt((fx - h) * (fx - h) + (fy - h) * (fy - h))
+                if (cd < rLens) hh += 0.9f * sqrt(max(0f, 1f - (cd / rLens) * (cd / rLens)))
+                else if (cd < rLens + 3f) hh -= 0.25f
+            }
+            return hh
+        }
+
+        for (y in 0 until big) for (x in 0 until big) {
+            val fx = (x + 0.5f) * t / big
+            val fy = (y + 0.5f) * t / big
+            val d = silDist(fx, fy)
+            if (d <= -1f) continue
+            val alpha = ((d + 1f) / 1.5f).coerceIn(0f, 1f)
+            val e = 0.6f
+            val h0 = hgt(fx, fy)
+            var nx = -(hgt(fx + e, fy) - hgt(fx - e, fy)) / (2f * e) * 5f
+            var ny = -(hgt(fx, fy + e) - hgt(fx, fy - e)) / (2f * e) * 5f
+            val nl = sqrt(nx * nx + ny * ny + 1f)
+            nx /= nl; ny /= nl
+            val nz = 1f / nl
+
+            // albedo del casco con desgaste
+            val n = Noise.fbm(fx * 0.05f, fy * 0.3f, sd, 3)
+            val grain = Noise.fbm(fx * 0.7f, fy * 0.7f, sd + 9f, 2)
+            var lum = (0.8f + 0.4f * n) * (0.9f + 0.2f * grain)
+            lum *= 0.82f + 0.36f * Noise.fbm(fx * 0.9f, fy * 0.05f, sd + 4f, 3)
+            val panel = (fx / 32f).toInt() + (fy / 32f).toInt() * 3
+            lum *= 0.9f + 0.2f * Noise.n3(panel.toFloat(), sd, 2.2f)
+            var r = huR * lum; var g = huG * lum; var b = huB * lum
+            when (f.special) {
+                1 -> {
+                    val cell = 2.2f
+                    val uu = (fx % cell) / cell
+                    val par = ((fx / cell).toInt() + (fy / cell).toInt()) % 2 == 0
+                    val wv = 0.7f + 0.3f * (if (par) uu else 1f - uu)
+                    r *= wv; g *= wv; b *= wv
+                }
+                2 -> {
+                    val cn = Noise.fbm(fx * 0.12f + sd, fy * 0.12f, 3.3f, 3)
+                    if (cn > 0.56f) { r *= 0.62f; g *= 0.78f; b *= 0.55f }
+                    else if (cn < 0.42f) { r *= 1.35f; g *= 1.2f; b *= 0.9f }
+                }
+                3 -> {
+                    val ia = (nx + ny) * 5f + fx * 0.04f
+                    r *= 0.75f + 0.45f * kotlin.math.sin(ia)
+                    g *= 0.75f + 0.45f * kotlin.math.sin(ia + 2.1f)
+                    b *= 0.75f + 0.45f * kotlin.math.sin(ia + 4.2f)
+                }
+            }
             val cdn = sqrt((fx - h) * (fx - h) + (fy - h) * (fy - h)) / t
+            var er = 0f; var eg = 0f; var eb = 0f
+            // franja de facción
             val stripe = when {
-                horiz -> abs(v - 0.5f) < 0.06f
-                vert -> abs(u - 0.5f) < 0.06f
+                horiz -> abs(fy - h) < 3.8f
+                vert -> abs(fx - h) < 3.8f
                 else -> cdn > 0.30f && cdn < 0.35f
             }
-            if (stripe && d > 3f) { r = cr * 0.9f; g = cg * 0.9f; b = cb * 0.9f }
+            if (stripe && d > 3f) {
+                r = acR * 0.8f; g = acG * 0.8f; b = acB * 0.8f
+                er += acR * 0.22f; eg += acG * 0.22f; eb += acB * 0.22f
+            }
+            // ventanas
+            for (i in wins.indices) {
+                val dx = fx - wins[i][0] * t / 64f
+                val dy = fy - wins[i][1] * t / 64f
+                if (abs(dx) <= 3f && abs(dy) <= 2f) {
+                    if (lit[i]) { r = wnR * 0.4f; g = wnG * 0.4f; b = wnB * 0.4f; er += wnR; eg += wnG; eb += wnB }
+                    else { r *= 0.3f; g *= 0.3f; b *= 0.35f }
+                }
+            }
             // rejillas de motor en cuerpos rectos
             if (nb == 2 && !corner && d > 4f) {
                 val vy = if (horiz) min(abs(fy - (iT + 9f)), abs(fy - (t - iB - 9f))) else min(abs(fx - (iL + 9f)), abs(fx - (t - iR - 9f)))
                 val along = if (horiz) fx else fy
                 if (vy < 1.8f && along > 14f && along < 50f) {
-                    if (vy < 0.7f) { r = 255f; g = 140f; b = 50f } else { r = 18f; g = 18f; b = 24f }
+                    r = 16f; g = 16f; b = 22f
+                    if (vy < 0.7f) { er += fbR; eg += fbG; eb += fbB }
                 }
             }
             // lente / reactor
             if (rLens > 0f) {
                 val cd = cdn * t
-                if (cd < rLens + 3f) {
-                    if (cd > rLens) { r *= 0.3f; g *= 0.3f; b *= 0.35f }
-                    else {
-                        val kk = (1f - cd / rLens).coerceIn(0f, 1f).pow(1.1f)
-                        r = 70f + 185f * kk
-                        g = 14f + 90f * kk * kk
-                        b = 14f + 30f * kk * kk * kk
-                        val hl = smooth(rLens * 0.35f, 0f, sqrt((fx - h + rLens * 0.3f) * (fx - h + rLens * 0.3f) + (fy - h + rLens * 0.3f) * (fy - h + rLens * 0.3f)))
-                        r += 120f * hl; g += 120f * hl; b += 110f * hl
-                    }
-                }
+                if (cd < rLens) {
+                    val kk = (1f - cd / rLens).coerceIn(0f, 1f).pow(1.1f)
+                    r = lnR * 0.3f; g = lnG * 0.3f; b = lnB * 0.3f
+                    er += lnR * (0.35f + 0.9f * kk); eg += lnG * (0.35f + 0.9f * kk); eb += lnB * (0.35f + 0.9f * kk)
+                } else if (cd < rLens + 3f) { r *= 0.3f; g *= 0.3f; b *= 0.35f }
             }
-            // borde: contorno oscuro y biselado iluminado arriba-izquierda
-            if (d < 1.6f) { r *= 0.3f; g *= 0.3f; b *= 0.35f }
-            else if (d < 4f) {
-                val f = if (min(fx, fy) < min(t - fx, t - fy)) 1.45f else 0.6f
-                r *= f; g *= f; b *= f
-            }
+            // iluminación
+            val ndl = max(0f, nx * lx + ny * ly + nz * lz)
+            val ndh = max(0f, nx * hx + ny * hy + nz * hz)
+            val spec = ndh.pow(18f + 70f * f.gloss) * (0.12f + 0.9f * f.gloss)
+            val ao = 0.7f + 0.3f * smooth(0f, 0.55f, h0)
+            val env = f.metal * (0.5f - 0.5f * ny)
+            val shade = (0.26f + 0.9f * ndl) * ao
+            var sp = 0f
+            if (f.sparkle > 0f && Noise.fbm(fx * 2.5f + 20f, fy * 2.5f, sd + 11f, 2) > 0.78f) sp = f.sparkle
+            val tr = huR / 255f; val tg = huG / 255f; val tb = huB / 255f
+            r = r * shade + 255f * spec * (0.55f + 0.45f * f.metal * tr) + 70f * env * (tr + 0.3f) + 255f * sp * ndl + er
+            g = g * shade + 255f * spec * (0.55f + 0.45f * f.metal * tg) + 70f * env * (tg + 0.3f) + 255f * sp * ndl + eg
+            b = b * shade + 255f * spec * (0.55f + 0.45f * f.metal * tb) + 70f * env * (tb + 0.3f) + 255f * sp * ndl + eb
+            if (d < 1.2f) { r *= 0.35f; g *= 0.35f; b *= 0.4f }
             px[y * big + x] = Color.argb(cl(255f * alpha), cl(r), cl(g), cl(b))
         }
         val bmp = Bitmap.createBitmap(px, big, big, Bitmap.Config.ARGB_8888)
@@ -222,7 +292,10 @@ object Textures {
             val cr = Noise.fbm(nx * 3.2f + sd, ny * 3.2f, 2f, 5)
             val crat = smooth(0.58f, 0.66f, Noise.fbm(nx * 5f + sd, ny * 5f, 7f, 3))
             val grain = Noise.fbm(nx * 9f + sd, ny * 9f, 5f, 3)
-            val shade = (0.22f + 0.95f * max(0f, dot) + (cr - 0.5f) * 0.55f) * (0.8f + 0.4f * grain) * (1f - 0.4f * crat)
+            val hr1 = Noise.fbm(nx * 5f + sd, ny * 5f, 2f, 4)
+            val hr2 = Noise.fbm((nx - 0.03f) * 5f + sd, (ny - 0.03f) * 5f, 2f, 4)
+            val rel = (hr1 - hr2) * 14f
+            val shade = (0.22f + 0.95f * max(0f, dot) + (cr - 0.5f) * 0.55f + rel * 0.5f) * (0.8f + 0.4f * grain) * (1f - 0.4f * crat)
             val r = 128f * shade; val g = 112f * shade; val b = 98f * shade
             px[y * size + x] = Color.argb(cl(255f * edge), cl(r), cl(g), cl(b))
         }
@@ -339,7 +412,8 @@ object Textures {
             else { lr = lLr; lg = lLg; lb = lLb }
             lr += (lHr - lr) * e * 0.8f; lg += (lHg - lg) * e * 0.8f; lb += (lHb - lb) * e * 0.8f
             // relieve: sombreado según la pendiente en dirección de la luz
-            val bump = ((c0 - c2) * 16f).coerceIn(-0.4f, 0.4f) * land
+            val micro = if (land > 0.3f) (Noise.fbm(sx * 7f, sy * 7f, sz * 7f, 3) - 0.5f) * 0.35f * land else 0f
+            val bump = ((c0 - c2) * 26f).coerceIn(-0.55f, 0.55f) * land + micro
             r = orr + (lr - orr) * land; g = og + (lg - og) * land; b = ob + (lb - ob) * land
             r *= 1f + bump; g *= 1f + bump; b *= 1f + bump
             val crat = if (skin.craters > 0f && land > 0.3f) smooth(0.60f, 0.70f, Noise.fbm(sx * 3.5f, sy * 3.5f, sz * 3.5f + 9f, 3)) else 0f
@@ -372,8 +446,10 @@ object Textures {
             if (cityRaw > 0.70f && land > 0.95f && ice < 0.1f && nz > 0.3f && ((x * 7 + y * 13) % 41 == 0)) {
                 out.add(floatArrayOf(nx, ny))
             }
-            val sp = max(0f, nx * hx + ny * hy + nz * hz).pow(80f) * oceanMask * (1f - cloud) * 0.85f
+            val wave = if (oceanMask > 0.3f) Noise.fbm(sx * 9f, sy * 9f, sz * 9f, 2) - 0.5f else 0f
+            val sp = max(0f, nx * hx + ny * hy + nz * hz + wave * 0.12f).pow(70f) * oceanMask * (1f - cloud) * 0.85f
             r += 255f * sp; g += 255f * sp; b += 240f * sp
+            if (ice > 0.5f && Noise.fbm(sx * 14f, sy * 14f, sz * 14f, 2) > 0.8f) { r += 80f * day; g += 85f * day; b += 90f * day }
             val limb = 0.55f + 0.45f * sqrt(nz)
             r *= limb; g *= limb; b *= limb
             val fres = (1f - nz).pow(2.6f)

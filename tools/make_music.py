@@ -357,66 +357,118 @@ def menu_theme():
     return m.finish(wet=0.46, rt60=5.2, bass=0.35)
 
 
-# ------------------------------------------------------------------ partida: orquesta épica con graves
+def crash(dur=3.5):
+    """Platillo de impacto con caída larga."""
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    noise = RNG.normal(0, 1, n)
+    hp = noise - np.convolve(noise, np.ones(10) / 10, mode="same")
+    return hp * np.exp(-t * 1.6) * np.minimum(1.0, t * 400)
+
+
+# ------------------------------------------------------------------ partida: Epic Core orquestal
 def game_theme():
-    beat = 60.0 / 76
-    total = 96 * beat
+    bpm = 128
+    beat = 60.0 / bpm
+    total = 128 * beat
     m = Mix(total, tail=3.5)
-    chords = [(45, 3), (41, 4), (48, 4), (43, 4), (45, 3), (41, 4), (43, 4), (40, 4),
-              (45, 3), (41, 4), (43, 4), (40, 4)]  # 8 tiempos c/u
-    for ci, (root, third) in enumerate(chords):
-        t0 = ci * 8 * beat
-        dur = 8 * beat + 2.2
-        ext = [14, 11, 14, 14, 14, 11, 14, 10, 14, 11, 14, 10][ci]
-        m.add(t0, sub(midi(root - 12), dur, a=1.2, r=2.0), 0.16)
-        m.add(t0, section(midi(root - 12), dur, a=1.2, r=1.8, fc=560, ens=5), 0.40)
-        m.add(t0, section(midi(root), dur, a=1.2, r=1.8, fc=900, ens=5), 0.30, pan=-0.25)
-        m.add(t0, section(midi(root + 19), dur, a=1.2, r=1.8, fc=1600, ens=5), 0.19, pan=0.2)
-        m.add(t0, section(midi(root + third + 12), dur, a=1.2, r=1.8, fc=1600, ens=5), 0.19, pan=-0.1)
-        m.add(t0 + beat, section(midi(root + ext + 12), dur - 1.5 * beat, a=1.8, r=2.0, fc=1800, ens=5), 0.11, pan=0.35)
-        if ci >= 2:
-            m.add(t0 + 0.2, section(midi(root + 24), dur, a=1.6, r=2.0, fc=3000, ens=8), 0.18, pan=-0.4)
-            m.add(t0 + 0.2, section(midi(root + third + 24), dur, a=1.6, r=2.0, fc=3000, ens=8), 0.15, pan=0.4)
-        if ci >= 4:
-            m.add(t0, horn(midi(root), dur, a=0.7, r=1.2), 0.24, pan=-0.3)
-            m.add(t0, horn(midi(root + 12), dur, a=0.7, r=1.2), 0.20, pan=0.0)
-            m.add(t0, horn(midi(root + 19), dur, a=0.7, r=1.2), 0.17, pan=0.3)
-        m.add(t0, voice(midi(root - 12), dur, OH, a=1.4, r=2.2, ens=5, vowel2=AH), 0.16)
-        if ci >= 5:
-            for j, nt in enumerate(chord_notes(root, third)[:4]):
-                m.add(t0, voice(midi(nt - 12), dur, [OH, AH, OH, EH][j], a=1.2, r=2.0, ens=5, vowel2=AH), 0.12, pan=-0.5 + 0.33 * j)
-        # golpes graves en cada cambio de acorde
-        m.add(t0, timpani(midi(root - 24), 4.0, 1.7), 0.55 if ci >= 2 else 0.38)
-        m.add(t0, timpani(midi(root - 12)), 0.40 if ci >= 2 else 0.28)
-        m.add(t0 + 4 * beat, timpani(midi(root - 12)), 0.22)
-        if ci >= 6:
-            for k in (2, 6):
-                m.add(t0 + k * beat, timpani(midi(root - 12), 2.0, 3.0), 0.16)
-        if ci in (3, 7):
-            m.add(t0 + 4.5 * beat, swell(), 0.06)
+    cyc = [(45, 3), (41, 4), (48, 4), (43, 4), (45, 3), (41, 4), (43, 4), (40, 4)]  # 8 tiempos c/u
+    for cy in range(2):
+        full = cy == 1
+        for ci, (root, third) in enumerate(cyc):
+            t0 = (cy * 8 + ci) * 8 * beat
+            dur = 8 * beat + 1.8
+            # base de cuerdas graves, violas y violines
+            m.add(t0, sub(midi(root - 12), dur, a=0.6, r=1.6), 0.15)
+            m.add(t0, section(midi(root - 12), dur, a=0.5, r=1.6, fc=600, ens=5), 0.40)
+            m.add(t0, section(midi(root), dur, a=0.5, r=1.6, fc=950, ens=5), 0.28, pan=-0.25)
+            m.add(t0, section(midi(root + 19), dur, a=0.7, r=1.6, fc=1700, ens=5), 0.18, pan=0.2)
+            m.add(t0, section(midi(root + third + 12), dur, a=0.7, r=1.6, fc=1700, ens=5), 0.18, pan=-0.1)
+            m.add(t0, section(midi(root + 24), dur, a=0.9, r=1.6, fc=3000, ens=8), 0.17, pan=-0.4)
+            m.add(t0, section(midi(root + third + 24), dur, a=0.9, r=1.6, fc=3000, ens=8), 0.14, pan=0.4)
+            # ostinato orquestal de cuerdas en semicorcheas (spiccato)
+            pat = [0, 0, 7, 0, 0, 0, 7, 12]
+            for k in range(32):
+                nt = root + 12 + pat[k % 8]
+                acc = 1.0 if k % 4 == 0 else 0.65
+                m.add(t0 + k * beat / 4, section(midi(nt), 0.2, a=0.004, r=0.09, fc=2300, ens=4),
+                      (0.20 if full else 0.13) * acc, pan=-0.35 if k % 2 == 0 else 0.35)
+            # trompas: acordes de fanfarria
+            if full or ci >= 2:
+                for k, (bt, d) in enumerate([(0, 1.5), (1.5, 1.0), (2.5, 1.5), (4, 3.5)]):
+                    for iv in (0, 7, 12):
+                        m.add(t0 + bt * beat, horn(midi(root + 12 + iv), d * beat + 0.4, a=0.05, r=0.5), 0.15 if full else 0.10,
+                              pan=-0.3 + 0.3 * (iv // 7))
+            # coro potente
+            if full:
+                for j, nt in enumerate(chord_notes(root, third)[:4]):
+                    m.add(t0, voice(midi(nt - 12), dur, [OH, AH, OH, EH][j], a=0.5, r=1.6, ens=6, vowel2=AH), 0.13, pan=-0.5 + 0.33 * j)
+            # taiko y tambores épicos
+            m.add(t0, timpani(midi(root - 24), 3.5, 1.6), 0.60)
+            m.add(t0, drum(f0=52, sweep=70, decay=3.5), 0.45)
+            m.add(t0 + 2 * beat, timpani(midi(root - 12), 2.0, 2.8), 0.40)
+            m.add(t0 + 4 * beat, timpani(midi(root - 24), 2.5, 2.2), 0.45)
+            m.add(t0 + 6 * beat, timpani(midi(root - 12), 2.0, 2.8), 0.30)
+            for bt in ((3, 5.5, 7, 7.5) if full else (3, 7)):
+                m.add(t0 + bt * beat, tom(95 if bt % 2 else 120, 0.45, 8.0), 0.30, pan=-0.2 if bt % 2 else 0.2)
+            # braam grave en cada cambio de acorde
+            if full or ci % 2 == 0:
+                m.add(t0, horn(midi(root - 12), 3.0, a=0.06, r=1.4), 0.28)
+                m.add(t0, horn(midi(root - 24 + 12), 3.0, a=0.06, r=1.4), 0.20)
+            if ci == 7:
+                m.add(t0 + 4.5 * beat, swell(3.4), 0.11 if full else 0.08)
+    # subida e impacto al empezar el segundo ciclo
+    t_imp = 64 * beat
+    m.add(t_imp - 4 * beat, swell(4 * beat), 0.20)
+    m.add(t_imp, crash(), 0.20)
+    m.add(t_imp, timpani(midi(33), 4.0, 1.4), 0.75)
+    # melodía heroica
     motif = [(69, 0, 2), (72, 2, 1), (76, 3, 2), (74, 5, 1), (72, 6, 2),
              (72, 8, 1), (77, 9, 1), (81, 10, 2), (79, 12, 2), (76, 14, 2),
              (74, 16, 1), (79, 17, 1), (83, 18, 2), (81, 20, 2), (79, 22, 2),
              (76, 24, 2), (74, 26, 1), (71, 27, 1), (68, 28, 4)]
-    for base in (32, 64):
+    for base in (32, 64, 96):
         for nt, b, d in motif:
-            m.add((base + b) * beat, section(midi(nt - 12), d * beat + 0.9, a=0.25, r=0.9, fc=2600, ens=4, depth=0.008, scoop=0.9), 0.24, pan=0.1)
-            m.add((base + b) * beat, section(midi(nt), d * beat + 0.8, a=0.3, r=0.8, fc=3400, ens=6, depth=0.007, scoop=0.7), 0.16, pan=-0.1)
-            if base == 64:
-                m.add((base + b) * beat, horn(midi(nt - 12), d * beat + 0.8, a=0.2, r=0.8), 0.16, pan=-0.1)
-    return m.finish(wet=0.36, rt60=3.6, bass=0.3)
+            vol = 0.22 if base >= 64 else 0.14
+            m.add((base + b) * beat, section(midi(nt), d * beat + 0.6, a=0.08, r=0.6, fc=3400, ens=6, depth=0.007, scoop=0.7), vol, pan=-0.1)
+            m.add((base + b) * beat, horn(midi(nt - 12), d * beat + 0.6, a=0.08, r=0.6), vol * 0.8, pan=0.1)
+    return m.finish(wet=0.34, rt60=3.2, bass=0.3)
 
 
-def place_sfx():
-    """Golpe sordo y metálico muy leve cuando una nave se acopla."""
-    n = int(0.32 * SR)
+def place_sfx(kind=0):
+    """Sonido muy leve al fijar una nave; cada facción tiene el suyo."""
+    n = int(0.45 * SR)
     t = np.arange(n) / SR
-    thump = np.sin(phase_of(70 + 90 * np.exp(-t * 40))) * np.exp(-t * 16)
-    click = RNG.normal(0, 1, n)
-    click = np.convolve(click, np.ones(5) / 5, mode="same") * np.exp(-t * 130)
-    ring = (np.sin(2 * np.pi * 820 * t) * 0.5 + np.sin(2 * np.pi * 1330 * t) * 0.3) * np.exp(-t * 24)
-    x = thump * 0.9 + click * 0.25 + ring * 0.12
-    x *= np.minimum(1.0, t * 900)
+    if kind == 0:  # golpe sordo
+        x = np.sin(phase_of(70 + 90 * np.exp(-t * 40))) * np.exp(-t * 16)
+        x += np.convolve(RNG.normal(0, 1, n), np.ones(5) / 5, mode="same") * np.exp(-t * 130) * 0.25
+        x += (np.sin(2 * np.pi * 820 * t) * 0.5 + np.sin(2 * np.pi * 1330 * t) * 0.3) * np.exp(-t * 24) * 0.12
+    elif kind == 1:  # choque metálico
+        x = sum(g * np.sin(2 * np.pi * f * t) * np.exp(-t * d) for f, g, d in
+                [(310, 1.0, 9), (487, 0.8, 11), (913, 0.6, 14), (1371, 0.4, 18), (2210, 0.25, 25)])
+        x = x * 0.45 + np.sin(phase_of(120 + 80 * np.exp(-t * 50))) * np.exp(-t * 20) * 0.5
+    elif kind == 2:  # zumbido láser
+        x = np.sin(phase_of(1900 * np.exp(-t * 9) + 260)) * np.exp(-t * 12) * 0.7
+        x += np.sin(phase_of(70 + 60 * np.exp(-t * 40))) * np.exp(-t * 18) * 0.5
+    elif kind == 3:  # campanilla de cristal
+        x = sum(g * np.sin(2 * np.pi * f * t) * np.exp(-t * d) for f, g, d in
+                [(1568, 1.0, 7), (2349, 0.5, 9), (3136, 0.3, 12), (4186, 0.15, 16)]) * 0.5
+        x += np.sin(phase_of(80 + 60 * np.exp(-t * 40))) * np.exp(-t * 22) * 0.35
+    elif kind == 4:  # gong grave
+        x = sum(g * np.sin(2 * np.pi * f * t) * np.exp(-t * d) for f, g, d in
+                [(95, 1.0, 5), (143, 0.7, 6), (211, 0.5, 8), (317, 0.3, 11)]) * 0.7
+    elif kind == 6:  # arpegio brillante ascendente
+        x = np.zeros(n)
+        for i, f in enumerate([1046, 1318, 1568, 2093]):
+            tt = np.maximum(0, t - i * 0.045)
+            x += np.sin(2 * np.pi * f * tt) * np.exp(-tt * 14) * (tt > 0) * 0.35
+        x += np.sin(phase_of(75 + 60 * np.exp(-t * 40))) * np.exp(-t * 20) * 0.35
+    else:  # descarga eléctrica
+        noise = RNG.normal(0, 1, n)
+        buzz = np.sin(2 * np.pi * 140 * t) * np.sign(np.sin(2 * np.pi * 37 * t))
+        x = (noise - np.convolve(noise, np.ones(6) / 6, mode="same")) * np.exp(-t * 28) * 0.5 + buzz * np.exp(-t * 16) * 0.35
+        x += np.sin(phase_of(60 + 90 * np.exp(-t * 45))) * np.exp(-t * 20) * 0.4
+    x = x * np.minimum(1.0, t * 900)
     return np.tanh(x * 1.2) * 0.8
 
 
@@ -431,7 +483,16 @@ def save_wav_mono(sig, out_dir, name):
 
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "."
-    save(menu_theme(), out, "menu_theme")
-    save(game_theme(), out, "game_theme")
-    save_wav_mono(place_sfx(), out, "place")
+    only = sys.argv[2] if len(sys.argv) > 2 else "all"
+    if only == "sfx":
+        for k in range(7):
+            save_wav_mono(place_sfx(k), out, f"place_{k}")
+        print("ok")
+        raise SystemExit
+    if only in ("all", "menu"):
+        save(menu_theme(), out, "menu_theme")
+    if only in ("all", "game"):
+        save(game_theme(), out, "game_theme")
+    for k in range(7):
+        save_wav_mono(place_sfx(k), out, f"place_{k}")
     print("ok")
