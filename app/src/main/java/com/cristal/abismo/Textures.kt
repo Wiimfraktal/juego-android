@@ -395,7 +395,7 @@ object Textures {
             val qy = ny * 0.92f + nz * 0.39f
             val qz = nz * 0.92f - ny * 0.39f
             val sx = qx * skin.freq + 3.1f + skin.seed; val sy = qy * skin.freq + 1.7f + skin.seed * 0.7f; val sz = qz * skin.freq + 5.3f + skin.seed * 1.3f
-            val c0 = Noise.fbm(sx, sy, sz, 6)
+            val c0 = Noise.fbm(sx, sy, sz, 7)
             val cRid = 1f - abs(2f * c0 - 1f)
             val cMix = c0 * (1f - skin.ridge) + cRid * 0.72f * skin.ridge
             val c = if (skin.bands > 0f) cMix + skin.bands * 0.10f * kotlin.math.sin(qy * 12f + 4f * c0) else cMix

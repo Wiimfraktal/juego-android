@@ -1,7 +1,6 @@
 package com.cristal.abismo
 
 import kotlin.math.abs
-import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.random.Random
@@ -65,14 +64,14 @@ class Game(val cols: Int, val rows: Int) {
     private var contact = 0f
     private var blocked = false
     private var fallT = 0f
-    private var rMax = 0f
+    private var vMax = 0
     private var accX = 0f
     private var accY = 0f
     private var nextType = Random.nextInt(Shapes.all.size)
 
     init { spawn() }
 
-    fun barNeed() = 400 + 200 * barsFilled
+    fun barNeed() = 600 + 260 * barsFilled
 
     fun addIron(a: Int) {
         barProgress += a
@@ -88,15 +87,12 @@ class Game(val cols: Int, val rows: Int) {
     private fun spawn() {
         val t = nextType
         nextType = Random.nextInt(Shapes.all.size)
-        val dirs = arrayOf(
-            intArrayOf(0, -1), intArrayOf(0, 1), intArrayOf(-1, 0), intArrayOf(1, 0),
-            intArrayOf(1, 1), intArrayOf(-1, 1), intArrayOf(1, -1), intArrayOf(-1, -1)
-        )
-        val d = dirs[Random.nextInt(8)]
-        gx = d[0]; gy = d[1]
+        // solo avanzan hacia arriba o hacia abajo
+        gx = 0
+        gy = if (Random.nextBoolean()) 1 else -1
         val p = Piece(t, Array(4) { Shapes.all[t][it].copyOf() }, cx, cy)
         piece = p
-        contact = 0f; blocked = false; fallT = 0f; rMax = 0f; accX = 0f; accY = 0f
+        contact = 0f; blocked = false; fallT = 0f; vMax = 0; accX = 0f; accY = 0f
         if (collides(p.cells, p.px, p.py)) over = true
     }
 
@@ -110,26 +106,19 @@ class Game(val cols: Int, val rows: Int) {
         return false
     }
 
-    private fun radius(px: Int, py: Int) = hypot((px - cx).toFloat(), (py - cy).toFloat())
+    private fun vdist(py: Int) = abs(py - cy)
 
-    /** Dirección de avance según el octante respecto al centro: eje X, eje Y o diagonal. */
+    /** Avance vertical: hacia arriba si está sobre el centro, hacia abajo si está debajo. */
     private fun updateDir() {
         val p = piece ?: return
-        val dx = p.px - cx
         val dy = p.py - cy
-        val ax = abs(dx)
-        val ay = abs(dy)
-        if (ax == 0 && ay == 0) return
-        val sx = if (dx > 0) 1 else if (dx < 0) -1 else 0
-        val sy = if (dy > 0) 1 else if (dy < 0) -1 else 0
-        if (ax >= 2 * ay) { gx = sx; gy = 0 }
-        else if (ay >= 2 * ax) { gx = 0; gy = sy }
-        else { gx = sx; gy = sy }
+        gx = 0
+        if (dy > 0) gy = 1 else if (dy < 0) gy = -1
     }
 
     private fun place(p: Piece, nx: Int, ny: Int) {
         p.px = nx; p.py = ny
-        rMax = max(rMax, radius(nx, ny))
+        vMax = max(vMax, vdist(ny))
         updateDir()
     }
 
@@ -140,7 +129,7 @@ class Game(val cols: Int, val rows: Int) {
         val nx = p.px + dx
         val ny = p.py + dy
         if (collides(p.cells, nx, ny)) return false
-        if (radius(nx, ny) < rMax - 1.0f) return false
+        if (vdist(ny) < vMax) return false
         place(p, nx, ny)
         blocked = false
         return true
@@ -180,7 +169,7 @@ class Game(val cols: Int, val rows: Int) {
         for (k in kicks) {
             val nx = p.px + k[0]
             val ny = p.py + k[1]
-            if (radius(nx, ny) < rMax - 1.0f) continue
+            if (vdist(ny) < vMax) continue
             if (!collides(rot, nx, ny)) {
                 p.cells = rot
                 place(p, nx, ny)
@@ -210,24 +199,25 @@ class Game(val cols: Int, val rows: Int) {
     fun update(dt: Float) {
         if (over) { overTime += dt; return }
         val p = piece ?: return
-        // visual: la nave se desliza rápido hacia su celda real
-        val k = min(1f, dt * 22f)
-        p.fx += (p.px - p.fx) * k
-        p.fy += (p.py - p.fy) * k
         // lenta al nacer y cada vez más rápida hacia el borde
-        val frac = max(abs(p.px - cx) / (cols / 2f), abs(p.py - cy) / (rows / 2f))
+        val frac = abs(p.py - cy) / (rows / 2f)
         val fr = (frac / 0.7f).coerceIn(0f, 1f)
         val factor = 0.45f + 0.55f * fr * fr * (3f - 2f * fr)
-        val stepLen = if (gx != 0 && gy != 0) 1.4142f else 1f
+        val interval = 1f / (speed() * factor)
         fallT += dt
         var guard = 0
         while (guard++ < 6) {
-            val interval = stepLen / (speed() * factor)
             if (fallT < interval) break
             fallT -= interval
-            if (!fallStep(p)) { blocked = true; break }
+            if (!fallStep(p)) { blocked = true; fallT = 0f; break }
             blocked = false
         }
+        // visual continuo: la nave se desliza entre celdas según el avance, sin saltos
+        val canFall = !collides(p.cells, p.px, p.py + gy)
+        val prog = if (canFall) (fallT / interval).coerceIn(0f, 1f) else 0f
+        val k = min(1f, dt * 16f)
+        p.fx += (p.px - p.fx) * k
+        p.fy += (p.py + gy * prog - p.fy) * k
         if (blocked) {
             contact += dt
             if (contact > 0.18f) lock()

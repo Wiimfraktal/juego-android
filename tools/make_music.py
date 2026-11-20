@@ -149,6 +149,56 @@ def tom(freq, dur=0.5, decay=9.0):
     return drum(dur, freq, freq * 0.8, decay, 0.15)
 
 
+def snare(dur=0.35):
+    """Caja orquestal: cuerpo grave corto y bordón de ruido."""
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    noise = RNG.normal(0, 1, n)
+    hp = noise - np.convolve(noise, np.ones(4) / 4, mode="same")
+    body = np.sin(phase_of(190 + 60 * np.exp(-t * 60))) * np.exp(-t * 22)
+    return (hp * np.exp(-t * 14) * 0.7 + body * 0.6) * np.minimum(1.0, t * 2000)
+
+
+def gtr_note(freq, dur, mute=False, bend=0.0, vib=0.0):
+    """Nota de guitarra limpia (antes del amplificador): púa, caída y opcionalmente bend y vibrato."""
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    f = np.full(n, freq)
+    if bend:
+        f = f * 2 ** (bend / 12.0 * np.clip((t - 0.03) / 0.12, 0, 1))
+    if vib:
+        f = f * (1 + vib * np.sin(2 * np.pi * 5.6 * t) * np.clip((t - 0.18) / 0.25, 0, 1))
+    ph = phase_of(f)
+    sig = np.zeros(n)
+    for k in range(1, 32):
+        if freq * k > 7000:
+            break
+        sig += np.sin(k * ph + 0.3 * k) / k
+    env = np.exp(-t * (11.0 if mute else 0.9)) * np.minimum(1.0, t * 700)
+    rel = min(n, int(0.03 * SR))
+    env[n - rel:] *= np.linspace(1, 0, rel)
+    return sig * env
+
+
+def amp(x, drive=7.0, cut=4300.0):
+    """Distorsión de válvula + caja de altavoz (paso bajo, realce de medios, sin graves sueltos)."""
+    y = np.tanh(x * drive)
+    size = 1 << int(np.ceil(np.log2(len(y) + 1)))
+    Y = np.fft.rfft(y, size)
+    fr = np.fft.rfftfreq(size, 1 / SR)
+    H = 1 / (1 + (fr / cut) ** 4) * (1 + 0.8 * np.exp(-((fr - 1800) / 600) ** 2)) * (fr / 90) ** 2 / (1 + (fr / 90) ** 2)
+    out = np.fft.irfft(Y * H, size)[:len(y)]
+    return out / max(1e-9, np.max(np.abs(out)))
+
+
+def power_chord(buf, start, root, dur, mute):
+    for iv in (0, 7, 12):
+        sig = gtr_note(midi(root + iv) * 2 ** (RNG.uniform(-4, 4) / 1200), dur, mute)
+        i = int(start * SR)
+        seg = sig[: max(0, len(buf) - i)]
+        buf[i:i + len(seg)] += seg
+
+
 def shaker(dur=0.09):
     n = int(dur * SR)
     t = np.arange(n) / SR
@@ -174,7 +224,7 @@ class Mix:
         self.L[i:i + len(sig)] += sig * gl
         self.R[i:i + len(sig)] += sig * gr
 
-    def finish(self, wet=0.38, rt60=3.4, peak=0.89, bass=0.9):
+    def finish(self, wet=0.38, rt60=3.4, peak=0.89, bass=0.9, loop=True):
         n = len(self.L)
         ir_len = int(rt60 * SR)
         t = np.arange(ir_len) / SR
@@ -201,11 +251,12 @@ class Mix:
             outs.append(base + bass * lows)
         L, R = outs
         # bucle sin costura: la cola de reverb se pliega al inicio
-        main = self.n
-        for ch in (L, R):
-            tail = ch[main:]
-            ch[:len(tail)] += tail
-        L, R = L[:main], R[:main]
+        if loop:
+            main = self.n
+            for ch in (L, R):
+                tail = ch[main:]
+                ch[:len(tail)] += tail
+            L, R = L[:main], R[:main]
         m = max(np.max(np.abs(L)), np.max(np.abs(R)))
         L, R = np.tanh(L / m * 1.25) / np.tanh(1.25), np.tanh(R / m * 1.25) / np.tanh(1.25)
         L, R = L * peak, R * peak
@@ -432,7 +483,57 @@ def game_theme():
             vol = 0.22 if base >= 64 else 0.14
             m.add((base + b) * beat, section(midi(nt), d * beat + 0.6, a=0.08, r=0.6, fc=3400, ens=6, depth=0.007, scoop=0.7), vol, pan=-0.1)
             m.add((base + b) * beat, horn(midi(nt - 12), d * beat + 0.6, a=0.08, r=0.6), vol * 0.8, pan=0.1)
+    # guitarras eléctricas rítmicas (dos tomas, izquierda y derecha) en el segundo ciclo
+    for side, pan in ((0, -0.65), (1, 0.65)):
+        buf = np.zeros(len(m.L))
+        for ci, (root, third) in enumerate(cyc):
+            t0 = (8 + ci) * 8 * beat
+            for k in range(16):
+                bt = t0 + k * beat / 2
+                if k in (0, 8):
+                    power_chord(buf, bt, root - 12 + 12, beat * 0.95, False)
+                elif k not in (1, 9):
+                    power_chord(buf, bt + RNG.uniform(0, 0.006), root - 12 + 12, beat * 0.45, True)
+        m.add(0, amp(buf), 0.16, pan=pan)
+    # tambores extra: caja en 2 y 4, redobles de taiko al final de cada acorde
+    for cy in range(2):
+        for ci in range(8):
+            t0 = (cy * 8 + ci) * 8 * beat
+            for bt in (1, 3, 5, 7):
+                m.add(t0 + bt * beat, snare(), 0.20 if cy == 1 else 0.12, pan=0.1)
+            if cy == 1 or ci % 2 == 1:
+                for k in range(4):
+                    m.add(t0 + (7 + k * 0.25) * beat, tom(130 - k * 12, 0.4, 9.0), 0.22 + 0.04 * k, pan=-0.3 + 0.2 * k)
     return m.finish(wet=0.34, rt60=3.2, bass=0.3)
+
+
+# ------------------------------------------------------------------ solo de guitarra al completar la barra
+def bar_solo():
+    bpm = 150
+    beat = 60.0 / bpm
+    m = Mix(3.4, tail=1.6)
+    lead = np.zeros(len(m.L))
+    # frase en La menor pentatónica con bend final y vibrato
+    notes = [(69, 0, 0.5), (72, 0.5, 0.5), (74, 1, 0.5), (76, 1.5, 0.5), (79, 2, 0.5), (81, 2.5, 0.5),
+             (79, 3, 0.25), (81, 3.25, 0.25), (84, 3.5, 0.5), (81, 4, 2.6)]
+    for i, (nt, b, d) in enumerate(notes):
+        last = i == len(notes) - 1
+        sig = gtr_note(midi(nt), d * beat + (1.2 if last else 0.08), bend=2.0 if last else 0.0, vib=0.012 if last else 0.0)
+        st = int(b * beat * SR)
+        seg = sig[: max(0, len(lead) - st)]
+        lead[st:st + len(seg)] += seg
+    m.add(0, amp(lead, drive=9.0, cut=5200), 0.42, pan=0.05)
+    rhythm = np.zeros(len(m.L))
+    power_chord(rhythm, 0, 45, 1.6, False)
+    power_chord(rhythm, 4 * beat, 41, 1.8, False)
+    m.add(0, amp(rhythm), 0.20, pan=-0.4)
+    m.add(0, crash(2.5), 0.18)
+    m.add(0, timpani(midi(33), 2.5, 2.0), 0.6)
+    m.add(0, drum(f0=52, sweep=70, decay=3.5), 0.5)
+    for k in range(6):
+        m.add(k * beat / 2, snare(), 0.18 + 0.03 * k, pan=0.1)
+    m.add(4 * beat, crash(2.0), 0.14)
+    return m.finish(wet=0.3, rt60=2.0, bass=0.25, loop=False)
 
 
 def place_sfx(kind=0):
@@ -484,6 +585,18 @@ def save_wav_mono(sig, out_dir, name):
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else "."
     only = sys.argv[2] if len(sys.argv) > 2 else "all"
+    if only == "solo":
+        st = bar_solo()
+        n = int(0.06 * SR)
+        st[-n:] *= np.linspace(1, 0, n)[:, None]
+        pcm = (np.clip(st, -1, 1) * 32767).astype("<i2")
+        with wave.open(f"{out}/bar_solo.wav", "wb") as w:
+            w.setnchannels(2)
+            w.setsampwidth(2)
+            w.setframerate(SR)
+            w.writeframes(pcm.tobytes())
+        print("ok")
+        raise SystemExit
     if only == "sfx":
         for k in range(7):
             save_wav_mono(place_sfx(k), out, f"place_{k}")

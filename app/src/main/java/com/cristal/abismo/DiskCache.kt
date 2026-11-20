@@ -9,7 +9,7 @@ import java.io.FileOutputStream
 /** Guarda en disco las texturas generadas para que las siguientes aperturas sean casi instantáneas. */
 object DiskCache {
     // subir al cambiar el aspecto de los generadores de texturas
-    private const val VER = "v4"
+    private const val VER = "v5"
 
     private fun file(dir: File, name: String) = File(dir, "${VER}_$name")
 
