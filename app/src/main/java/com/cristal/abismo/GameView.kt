@@ -1415,7 +1415,7 @@ class GameView(ctx: Context) : View(ctx) {
                     if (tabRect1.contains(sx, sy) && tabRect1.contains(e.x, e.y)) { tab = 1; preview = skinSel; requestSkin(preview); return true }
                     if (tab == 0) {
                         if (musicRect.contains(sx, sy) && musicRect.contains(e.x, e.y)) {
-                            music.setEnabled(!music.enabled)
+                            music.turn(!music.enabled)
                             try { prefs.edit().putBoolean("music", music.enabled).apply() } catch (ex: Exception) { }
                         } else if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
                     } else {

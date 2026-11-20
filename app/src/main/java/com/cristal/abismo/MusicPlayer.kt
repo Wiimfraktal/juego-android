@@ -45,7 +45,7 @@ class MusicPlayer(private val ctx: Context) {
         startCurrent()
     }
 
-    fun setEnabled(on: Boolean) {
+    fun turn(on: Boolean) {
         enabled = on
         if (!on) retireCurrent() else if (cur == null) startCurrent()
     }
