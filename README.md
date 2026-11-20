@@ -21,3 +21,6 @@ El APK se compila solo en GitHub Actions con cada cambio en `main`.
 ## Créditos de audio
 
 La música usa grabaciones de la librería orquestal [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE) de Versilian Studios (licencia CC0). Las mezclas se generan con `tools/orquesta.py`; la guitarra eléctrica es un modelo físico de cuerda definido en `tools/make_music.py`.
+
+
+Batería, guitarras y contrabajo de los temas Épica, Neutron y Duro: bancos CC0 de Karoryfer Lecolds (Big Rusty Drums, Emilyguitar, Meatbass), https://github.com/sfzinstruments .

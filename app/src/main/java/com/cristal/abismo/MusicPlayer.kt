@@ -12,7 +12,7 @@ class MusicPlayer(private val ctx: Context) {
         var target = 1f
     }
 
-    private val tracks = intArrayOf(R.raw.menu_theme, R.raw.game_theme, R.raw.theme_tension, R.raw.theme_rock, R.raw.theme_heroic, R.raw.theme_warm)
+    private val tracks = intArrayOf(R.raw.menu_theme, R.raw.game_theme, R.raw.theme_tension, R.raw.theme_rock, R.raw.theme_heroic, R.raw.theme_neutron, R.raw.theme_duro)
     private var cur: Voice? = null
     private val fading = ArrayList<Voice>()
     private var track = -1

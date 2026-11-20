@@ -37,10 +37,11 @@ class MusicTheme(val name: String, val price: Int, val desc: String)
 
 object MusicThemes {
     val all: Array<MusicTheme> = arrayOf(
-        MusicTheme("Épica", 0, "Orquesta, tambores y guitarras"),
+        MusicTheme("Épica", 0, "Rock orquestal: batería, guitarras y bajo"),
         MusicTheme("Tensión", 85, "Oscura y pulsante"),
         MusicTheme("Rock", 125, "Guitarras al frente"),
         MusicTheme("Heroica", 170, "Fanfarria de metales"),
-        MusicTheme("Cálido", 160, "Guitarra acústica, piano y cuerdas")
+        MusicTheme("Neutron", 160, "Folk-pop alegre: guitarra, contrabajo y piano"),
+        MusicTheme("Duro", 190, "French house con sintetizadores")
     )
 }
