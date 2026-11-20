@@ -439,7 +439,6 @@ class GameView(ctx: Context) : View(ctx) {
             respawn(c, maxD, true)
             cosmic.add(c)
         }
-        if (b.galaxy && galaxyBmp == null) galaxyBmp = Textures.makeGalaxy(256)
         if (b.cluster && clusterPts == null) {
             val n = 90
             clusterPts = FloatArray(n * 3) {
@@ -479,50 +478,74 @@ class GameView(ctx: Context) : View(ctx) {
      * Después, en segundo plano, prepara miniaturas de superficies y vistas de facciones (guardadas en disco).
      * El guardado de PNG nunca bloquea la carga.
      */
+    private val fullRes = BooleanArray(Skins.all.size)
+
+    /**
+     * Carga todo en la pantalla inicial: planeta equipado a resolución completa, naves de la facción equipada,
+     * rocas y galaxia, vistas previas de todas las superficies, vistas de todas las facciones y, en disco, las
+     * superficies y facciones compradas (para equiparlas al instante). Lo ya generado se lee del disco.
+     */
     private fun startLoading() {
         if (loading) return
         loading = true
-        skinLoading[skinSel] = true
+        for (i in skins.indices) skinLoading[i] = true
         val pr = (planetR * 1.75f).toInt()
+        val prv = (planetR * 0.9f).toInt()
         val thumbR = (u * 1.3f).toInt()
         val dir = context.cacheDir
         Thread {
-            val total = 7f
+            val ownedSkins = skins.indices.filter { it != skinSel && (owned shr it) and 1 == 1 && !skins[it].classified }
+            val ownedFac = Factions.all.indices.filter { it != shipSel && (shipOwned shr it) and 1 == 1 && !Factions.all[it].classified }
+            val previews = skins.indices.filter { it != skinSel && !skins[it].classified }
+            val facs = Factions.all.indices.filter { !Factions.all[it].classified }
+            val total = 3f + 3f + 1f + previews.size * 0.6f + facs.size * 0.15f + ownedSkins.size * 1f + ownedFac.size * 1f
             var done = 0f
-            fun step(w: Float) { done += w; progress = min(1f, done / total) }
+            fun step(w: Float) { done += w; progress = min(0.999f, done / total) }
             val sel = skinSel
             val pd = DiskCache.loadPlanet(dir, sel, pr)
                 ?: Textures.makePlanet(pr, skins[sel]).also { saveAsync { DiskCache.savePlanet(dir, sel, pr, it) } }
             cache[sel] = pd
+            fullRes[sel] = true
             thumbs[sel] = Bitmap.createScaledBitmap(pd.bmp, thumbR * 2, thumbR * 2, true)
             step(3f)
             val fs = shipSel
-            val f0 = Factions.all[fs]
             ships = DiskCache.loadSprites(dir, fs, 28)
-                ?: Textures.makeShipSprites(BASE, f0).also { t -> saveAsync { DiskCache.saveSprites(dir, fs, t) } }
+                ?: Textures.makeShipSprites(BASE, Factions.all[fs]).also { t -> saveAsync { DiskCache.saveSprites(dir, fs, t) } }
             step(3f)
             rocks = Array(5) { Textures.makeRock(96, it * 7 + 1) }
+            if (galaxyBmp == null) galaxyBmp = Textures.makeGalaxy(256)
+            step(1f)
+            for (i in previews) {
+                val p = DiskCache.loadPlanet(dir, i, prv)
+                    ?: Textures.makePlanet(prv, skins[i], lite = true).also { saveAsync { DiskCache.savePlanet(dir, i, prv, it) } }
+                cache[i] = p
+                thumbs[i] = Bitmap.createScaledBitmap(p.bmp, thumbR * 2, thumbR * 2, true)
+                step(0.6f)
+            }
+            for (i in facs) {
+                shipThumbs[i] = DiskCache.loadNamed(dir, "fthumb_$i.png")
+                    ?: makeShipThumb(i).also { b -> saveAsync { DiskCache.saveNamed(dir, "fthumb_$i.png", b) } }
+                step(0.15f)
+            }
+            // superficies y facciones compradas: se dejan listas en disco para equiparlas sin esperas
+            for (i in ownedSkins) {
+                if (!DiskCache.hasPlanet(dir, i, pr)) DiskCache.savePlanet(dir, i, pr, Textures.makePlanet(pr, skins[i]))
+                step(1f)
+            }
+            for (i in ownedFac) {
+                if (!DiskCache.hasSprites(dir, i, 28)) DiskCache.saveSprites(dir, i, Textures.makeShipSprites(BASE, Factions.all[i]))
+                step(1f)
+            }
             progress = 1f
             loaded = true
             postInvalidate()
-            for (i in skins.indices) {
-                if (thumbs[i] != null || skins[i].classified) continue
-                thumbs[i] = DiskCache.loadThumb(dir, i, thumbR)
-                    ?: Textures.makePlanet(thumbR, skins[i]).bmp.also { b -> saveAsync { DiskCache.saveThumb(dir, i, thumbR, b) } }
-                postInvalidate()
-            }
-            for (i in Factions.all.indices) {
-                if (Factions.all[i].classified) continue
-                shipThumbs[i] = DiskCache.loadNamed(dir, "fthumb_$i.png")
-                    ?: makeShipThumb(i).also { b -> saveAsync { DiskCache.saveNamed(dir, "fthumb_$i.png", b) } }
-                postInvalidate()
-            }
         }.start()
     }
 
+    /** Al equipar una superficie se muestra al instante la vista previa y se cambia a la completa cuando está lista. */
     private fun requestSkin(i: Int) {
-        if (cache[i] != null || skinLoading[i]) return
-        skinLoading[i] = true
+        if (fullRes[i] || skins[i].classified) return
+        fullRes[i] = true
         val pr = (planetR * 1.75f).toInt()
         val dir = context.cacheDir
         Thread {
@@ -1803,7 +1826,7 @@ class GameView(ctx: Context) : View(ctx) {
         tabDir = if (n > tab) 1f else -1f
         tab = n
         tabT = 0f
-        if (n == 1) { preview = skinSel; requestSkin(preview) }
+        if (n == 1) { preview = skinSel }
     }
 
     /** Lingote dibujado una vez en un bitmap (evita crear gradientes en cada fotograma). */
@@ -2820,7 +2843,7 @@ class GameView(ctx: Context) : View(ctx) {
                                 val x = cardX(i)
                                 if (e.x >= x && e.x <= x + cardW) {
                                     when (subTab) {
-                                        0 -> { preview = i; if (!skins[i].classified) requestSkin(i) }
+                                        0 -> preview = i
                                         1 -> { previewShip = i; if (!factions[i].classified) sfx.place(factions[i].sfx) }
                                         3 -> previewBg = i
                                         4 -> previewTheme = i

@@ -655,7 +655,9 @@ object Textures {
     private const val RS = 0.93f
     private val LMAX = sqrt(1f - RS * RS)
 
-    fun makePlanet(radius: Int, skin: Skin = Skins.all[0]): PlanetData {
+    /** lite = vista previa: mismo diseño con menos detalle fino (bastante más rápida de generar). */
+    fun makePlanet(radius: Int, skin: Skin = Skins.all[0], lite: Boolean = false): PlanetData {
+        val wo = if (lite) 2 else 3
         val d = radius * 2
         val px = IntArray(d * d)
         val ll = sqrt(0.62f * 0.62f + 0.38f * 0.38f + 0.68f * 0.68f)
@@ -707,16 +709,16 @@ object Textures {
             val qz = nz * 0.92f - ny * 0.39f
             val sx0 = qx * skin.freq + 3.1f + skin.seed; val sy0 = qy * skin.freq + 1.7f + skin.seed * 0.7f; val sz0 = qz * skin.freq + 5.3f + skin.seed * 1.3f
             // deformación de dominio: costas y continentes más naturales
-            val sx = sx0 + (Noise.fbm(sx0 * 0.7f + 17f, sy0 * 0.7f, sz0 * 0.7f, 3) - 0.5f) * 0.9f
-            val sy = sy0 + (Noise.fbm(sx0 * 0.7f, sy0 * 0.7f + 29f, sz0 * 0.7f, 3) - 0.5f) * 0.9f
-            val sz = sz0 + (Noise.fbm(sx0 * 0.7f, sy0 * 0.7f, sz0 * 0.7f + 41f, 3) - 0.5f) * 0.9f
-            val c0 = Noise.fbm(sx, sy, sz, 7)
+            val sx = sx0 + (Noise.fbm(sx0 * 0.7f + 17f, sy0 * 0.7f, sz0 * 0.7f, wo) - 0.5f) * 0.9f
+            val sy = sy0 + (Noise.fbm(sx0 * 0.7f, sy0 * 0.7f + 29f, sz0 * 0.7f, wo) - 0.5f) * 0.9f
+            val sz = sz0 + (Noise.fbm(sx0 * 0.7f, sy0 * 0.7f, sz0 * 0.7f + 41f, wo) - 0.5f) * 0.9f
+            val c0 = Noise.fbm(sx, sy, sz, if (lite) 5 else 7)
             val cRid = 1f - abs(2f * c0 - 1f)
             val cMix = c0 * (1f - skin.ridge) + cRid * 0.72f * skin.ridge
             val c = if (skin.bands > 0f) cMix + skin.bands * 0.10f * kotlin.math.sin(qy * 12f + 4f * c0) else cMix
             val lat = abs(qy)
             val land = smooth(thr, thr + 0.035f, c)
-            val c2 = if (land > 0.02f) Noise.fbm(sx + lx * 0.05f, sy + ly * 0.05f, sz + lz * 0.05f, 6) else c0
+            val c2 = if (land > 0.02f && !lite) Noise.fbm(sx + lx * 0.05f, sy + ly * 0.05f, sz + lz * 0.05f, 6) else c0
             val moist = if (land > 0.02f) Noise.fbm(sx * 2f + 11f, sy * 2f, sz * 2f, 4) else 0.5f
             var r: Float; var g: Float; var b: Float
             val depth = smooth(thr - 0.20f, thr + 0.02f, c)
@@ -727,7 +729,7 @@ object Textures {
             else { lr = lLr; lg = lLg; lb = lLb }
             lr += (lHr - lr) * e * 0.8f; lg += (lHg - lg) * e * 0.8f; lb += (lHb - lb) * e * 0.8f
             // relieve: sombreado según la pendiente en dirección de la luz
-            val micro = if (land > 0.3f) (Noise.fbm(sx * 7f, sy * 7f, sz * 7f, 3) - 0.5f) * 0.35f * land else 0f
+            val micro = if (land > 0.3f && !lite) (Noise.fbm(sx * 7f, sy * 7f, sz * 7f, 3) - 0.5f) * 0.35f * land else 0f
             val bump = ((c0 - c2) * 26f).coerceIn(-0.55f, 0.55f) * land + micro
             r = orr + (lr - orr) * land; g = og + (lg - og) * land; b = ob + (lb - ob) * land
             r *= 1f + bump; g *= 1f + bump; b *= 1f + bump
@@ -745,11 +747,11 @@ object Textures {
             val ice = smooth(0.80f - skin.iceBias, 0.90f - skin.iceBias, lat + (if (lat > 0.45f) Noise.fbm(sx * 3f, sy * 3f, sz * 3f, 3) - 0.5f else 0f) * 0.18f)
             r += (icr - r) * ice; g += (icg - g) * ice; b += (icb - b) * ice
             val oceanMask = (1f - land) * (1f - ice)
-            val cn = Noise.fbm(sx * 1.5f + 40f, sy * 1.5f * skin.cloudStretch, sz * 1.5f + 7f, 5)
+            val cn = Noise.fbm(sx * 1.5f + 40f, sy * 1.5f * skin.cloudStretch, sz * 1.5f + 7f, if (lite) 4 else 5)
             val cloud = smooth(0.50f, 0.72f, cn) * skin.cloudAmt
             val dot = nx * lx + ny * ly + nz * lz
             val day = smooth(-0.10f, 0.40f, dot)
-            val csh = smooth(0.50f, 0.72f, Noise.fbm(sx * 1.5f + 40f - lx * 0.12f, sy * 1.5f * skin.cloudStretch - ly * 0.12f, sz * 1.5f + 7f - lz * 0.12f, 4))
+            val csh = if (lite) 0f else smooth(0.50f, 0.72f, Noise.fbm(sx * 1.5f + 40f - lx * 0.12f, sy * 1.5f * skin.cloudStretch - ly * 0.12f, sz * 1.5f + 7f - lz * 0.12f, 4))
             val shadeV = (0.03f + 0.97f * day) * (1f - 0.3f * csh * (1f - cloud))
             r = (r * (1f - cloud) + clr * cloud) * shadeV
             g = (g * (1f - cloud) + clg * cloud) * shadeV
@@ -761,10 +763,10 @@ object Textures {
             if (cityRaw > 0.70f && land > 0.95f && ice < 0.1f && nz > 0.3f && ((x * 7 + y * 13) % 41 == 0)) {
                 out.add(floatArrayOf(bx, by))
             }
-            val wave = if (oceanMask > 0.3f) Noise.fbm(sx * 9f, sy * 9f, sz * 9f, 2) - 0.5f else 0f
+            val wave = if (oceanMask > 0.3f && !lite) Noise.fbm(sx * 9f, sy * 9f, sz * 9f, 2) - 0.5f else 0f
             val sp = max(0f, nx * hx + ny * hy + nz * hz + wave * 0.12f).pow(70f) * oceanMask * (1f - cloud) * 0.85f
             r += 255f * sp; g += 255f * sp; b += 240f * sp
-            if (ice > 0.5f && Noise.fbm(sx * 14f, sy * 14f, sz * 14f, 2) > 0.8f) { r += 80f * day; g += 85f * day; b += 90f * day }
+            if (!lite && ice > 0.5f && Noise.fbm(sx * 14f, sy * 14f, sz * 14f, 2) > 0.8f) { r += 80f * day; g += 85f * day; b += 90f * day }
             val limb = 0.6f + 0.4f * sqrt(nz)
             r *= limb; g *= limb; b *= limb
             // dispersión atmosférica: bruma proporcional al aire entre el ojo y la superficie

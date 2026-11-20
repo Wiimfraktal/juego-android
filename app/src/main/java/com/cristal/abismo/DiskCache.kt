@@ -50,6 +50,10 @@ object DiskCache {
         for (i in arr.indices) saveBmp(file(dir, "spr_${fac}_$i.png"), arr[i])
     }
 
+    fun hasPlanet(dir: File, skin: Int, r: Int) = file(dir, "planet_${skin}_$r.png").exists() && file(dir, "planet_${skin}_$r.cit").exists()
+
+    fun hasSprites(dir: File, fac: Int, n: Int) = (0 until n).all { file(dir, "spr_${fac}_$it.png").exists() }
+
     fun loadNamed(dir: File, name: String): Bitmap? = loadBmp(file(dir, name))
 
     fun saveNamed(dir: File, name: String, b: Bitmap) = saveBmp(file(dir, name), b)
