@@ -8,6 +8,12 @@ import android.view.WindowManager
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // red de seguridad: un error en un hilo de fondo (p. ej. falta de memoria al generar texturas) no cierra el juego
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        val mainT = Thread.currentThread()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            if (t !== mainT) { System.gc() } else prev?.uncaughtException(t, e)
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (android.os.Build.VERSION.SDK_INT >= 28) {
             window.attributes.layoutInDisplayCutoutMode =

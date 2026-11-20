@@ -489,7 +489,7 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
-    private fun saveAsync(block: () -> Unit) { Thread { try { block() } catch (e: Exception) { } }.start() }
+    private fun saveAsync(block: () -> Unit) { Thread { try { block() } catch (e: Throwable) { } }.start() }
 
     private val fullRes = BooleanArray(Skins.all.size)
 
@@ -578,17 +578,18 @@ class GameView(ctx: Context) : View(ctx) {
             for (i in facs) tasks.add(0.15f to {
                 shipThumbs[i] = cachedTex(dir, "fthumb_$i") { Textures.makeShipSprite(2, 0, Factions.all[i].accent(BASE[2]), Factions.all[i], cp) }
             })
-            // superficies y facciones compradas: se dejan listas en disco (PNG) para equiparlas sin esperas
-            for (i in ownedSkins) tasks.add(1f to {
+            // superficies y facciones compradas: se dejan listas en disco, una por una al final (menos memoria a la vez)
+            val later = ArrayList<Pair<Float, () -> Unit>>()
+            for (i in ownedSkins) later.add(1f to {
                 if (!DiskCache.hasPlanet(dir, i, pr)) DiskCache.savePlanet(dir, i, pr, Textures.makePlanet(pr, skins[i]), raw = false)
             })
-            for (i in ownedFac) tasks.add(1f to {
+            for (i in ownedFac) later.add(1f to {
                 if (!DiskCache.hasSprites(dir, i)) DiskCache.saveSprites(dir, i, Textures.makeShipSprites(BASE, Factions.all[i], cp))
             })
-            val total = tasks.sumOf { it.first.toDouble() }.toFloat()
+            val total = (tasks.sumOf { it.first.toDouble() } + later.sumOf { it.first.toDouble() }).toFloat()
             var done = 0f
             val lock = Any()
-            val nt = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 6)
+            val nt = (Runtime.getRuntime().availableProcessors() / 2).coerceIn(2, 3)
             val pool = java.util.concurrent.Executors.newFixedThreadPool(nt)
             val futures = tasks.map { (w, job) ->
                 pool.submit {
@@ -599,6 +600,10 @@ class GameView(ctx: Context) : View(ctx) {
             }
             for (f in futures) try { f.get() } catch (e: Exception) { }
             pool.shutdown()
+            for ((w, job) in later) {
+                try { job() } catch (e: Throwable) { }
+                done += w; progress = min(0.999f, done / total); postInvalidate()
+            }
             progress = 1f
             loaded = true
             postInvalidate()
@@ -626,6 +631,16 @@ class GameView(ctx: Context) : View(ctx) {
 
     // ---------- ciclo ----------
     override fun onDraw(canvas: Canvas) {
+        val sc = canvas.saveCount
+        try { drawFrame(canvas) } catch (e: Throwable) {
+            // un fallo de un cuadro no cierra el juego: se descarta y se sigue con el siguiente
+            try { canvas.restoreToCount(sc) } catch (x: Throwable) { }
+            android.util.Log.e("FugaOrbital", "cuadro", e)
+            postInvalidateOnAnimation()
+        }
+    }
+
+    private fun drawFrame(canvas: Canvas) {
         val g = game ?: return
         val now = System.nanoTime()
         val dt = if (last == 0L || paused) 0f else min(0.05f, (now - last) / 1e9f)

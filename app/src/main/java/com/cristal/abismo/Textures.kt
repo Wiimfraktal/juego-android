@@ -102,11 +102,13 @@ object Textures {
                 while (true) {
                     val i = next.getAndIncrement()
                     if (i >= n) break
-                    out[i] = makeShipSprite(i / 4, i % 4, f.accent(colors[i / 4]), f, cp)
+                    out[i] = try { makeShipSprite(i / 4, i % 4, f.accent(colors[i / 4]), f, cp) } catch (e: Throwable) { null }
                 }
             }.also { th -> th.start() }
         }
         for (th in ths) th.join()
+        // si alguna falló (memoria), se reintenta aquí una por una
+        for (i in 0 until n) if (out[i] == null) out[i] = makeShipSprite(i / 4, i % 4, f.accent(colors[i / 4]), f, cp)
         return Array(n) { out[it]!! }
     }
 
@@ -606,7 +608,7 @@ object Textures {
         }
         val nt = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
         val parts = Array(nt) { ArrayList<FloatArray>() }
-        val ths = Array(nt) { i -> Thread { work(d * i / nt, d * (i + 1) / nt, parts[i]) }.also { t -> t.start() } }
+        val ths = Array(nt) { i -> Thread { try { work(d * i / nt, d * (i + 1) / nt, parts[i]) } catch (e: Throwable) { } }.also { t -> t.start() } }
         for (t in ths) t.join()
         for (p in parts) cand.addAll(p)
         if (cand.isEmpty()) cand.add(floatArrayOf(0.1f, 0.1f))
