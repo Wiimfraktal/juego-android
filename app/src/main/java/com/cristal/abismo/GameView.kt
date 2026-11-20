@@ -123,6 +123,8 @@ class GameView(ctx: Context) : View(ctx) {
     private val meteors = ArrayList<Meteor>()
     private val chips = ArrayList<Chip>()
     private var last = 0L
+    private var lastMusic = System.nanoTime()
+    private val musicRect = RectF()
     private var time = 0f
     private var shake = 0f
     private var starSpeed = 0.12f
@@ -130,6 +132,7 @@ class GameView(ctx: Context) : View(ctx) {
     private var flashWhite = 0f
 
     private val prefs = ctx.getSharedPreferences("abismo", Context.MODE_PRIVATE)
+    private val music = MusicPlayer(ctx).also { it.enabled = try { prefs.getBoolean("music", true) } catch (e: Exception) { true } }
     private var totalIngots = try { prefs.getInt("ingots", 0) } catch (e: Exception) { 0 }
     private var best = try { prefs.getInt("best", 0) } catch (e: Exception) { 0 }
     private var skinSel = try { prefs.getInt("skin", 0).coerceIn(0, skins.size - 1) } catch (e: Exception) { 0 }
@@ -177,6 +180,9 @@ class GameView(ctx: Context) : View(ctx) {
     private var downOnPause = false
 
     fun pause() { if (phase == 2) paused = true }
+    fun hostPause() { pause(); music.pause() }
+    fun hostResume() { music.resume() }
+    fun hostDestroy() { music.release() }
 
     @Suppress("DEPRECATION")
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
@@ -232,6 +238,7 @@ class GameView(ctx: Context) : View(ctx) {
         pauseRect.set(w / 2f - u * 0.7f, top - u * 0.75f, w / 2f + u * 0.7f, top + u * 0.3f)
         resumeRect.set(w / 2f - u * 3f, h / 2f + u * 0.2f, w / 2f + u * 3f, h / 2f + u * 1.6f)
         menuRect.set(w / 2f - u * 3.6f, h / 2f + u * 2.0f, w / 2f + u * 3.6f, h / 2f + u * 3.3f)
+        musicRect.set(w / 2f - u * 3f, h * 0.80f - u * 2.7f, w / 2f + u * 3f, h * 0.80f - u * 1.8f)
         escapeRect.set(w / 2f - u * 3.6f, h * 0.80f, w / 2f + u * 3.6f, h * 0.80f + u * 1.6f)
         val tb = topInset + u * 0.45f
         tabRect0.set(u * 0.4f, tb, w / 2f - u * 0.1f, tb + u * 0.95f)
@@ -380,6 +387,12 @@ class GameView(ctx: Context) : View(ctx) {
             phaseT += dt
             if (phaseT >= EXPLOSION_TIME) { phase = 2; phaseT = 0f }
         } else phaseT += dt
+
+        // música: calmada en carga y menú, épica en partida (vuelve a la calmada tras perder)
+        music.play(if (phase <= 0 || (phase == 2 && g.over && g.overTime > 1.5f)) 0 else 1)
+        music.duck = if (paused) 0.35f else 1f
+        music.update(min(0.05f, (now - lastMusic) / 1e9f))
+        lastMusic = now
 
         val near = g.nearestFilled()
         if (phase == 2 && !paused) {
@@ -1108,7 +1121,7 @@ class GameView(ctx: Context) : View(ctx) {
             paint.style = Paint.Style.FILL
             paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
             paint.textSize = u * 0.4f
-            c.drawText(if (i == 0) "JUGAR" else "PERSONALIZAR", r.centerX(), r.centerY() + u * 0.14f, paint)
+            c.drawText(if (i == 0) "MENÚ" else "PERSONALIZAR", r.centerX(), r.centerY() + u * 0.14f, paint)
         }
         if (tab == 0) drawPlayTab(c, a) else drawSkinTab(c, a)
     }
@@ -1124,6 +1137,17 @@ class GameView(ctx: Context) : View(ctx) {
         c.drawText("Aleja las naves del centro antes de que lleguen", width / 2f, topInset + u * 3.9f, paint)
         paint.color = Color.argb((220 * a).toInt(), 255, 255, 255)
         c.drawText("Récord: $best      Lingotes: $totalIngots", width / 2f, escapeRect.top - u * 0.7f, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb((150 * a).toInt(), 10, 14, 34)
+        c.drawRoundRect(musicRect, u * 0.4f, u * 0.4f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 2f
+        paint.color = Color.argb((120 * a).toInt(), 170, 200, 255)
+        c.drawRoundRect(musicRect, u * 0.4f, u * 0.4f, paint)
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb((235 * a).toInt(), 255, 255, 255)
+        paint.textSize = u * 0.4f
+        c.drawText(if (music.enabled) "Música: activada" else "Música: desactivada", width / 2f, musicRect.centerY() + u * 0.14f, paint)
         val pulse = 0.5f + 0.5f * sin(time * 3f)
         val ok = ready()
         paint.color = if (ok) Color.argb((255 * a).toInt(), 200 + (40 * pulse).toInt(), 40, 40) else Color.argb((200 * a).toInt(), 60, 70, 100)
@@ -1390,7 +1414,10 @@ class GameView(ctx: Context) : View(ctx) {
                     if (tabRect0.contains(sx, sy) && tabRect0.contains(e.x, e.y)) { tab = 0; return true }
                     if (tabRect1.contains(sx, sy) && tabRect1.contains(e.x, e.y)) { tab = 1; preview = skinSel; requestSkin(preview); return true }
                     if (tab == 0) {
-                        if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
+                        if (musicRect.contains(sx, sy) && musicRect.contains(e.x, e.y)) {
+                            music.setEnabled(!music.enabled)
+                            try { prefs.edit().putBoolean("music", music.enabled).apply() } catch (ex: Exception) { }
+                        } else if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
                     } else {
                         if (buyRect.contains(sx, sy) && buyRect.contains(e.x, e.y)) actSkin()
                         else if (!moved && e.y > cardsTop && e.y < cardsTop + cardH) {

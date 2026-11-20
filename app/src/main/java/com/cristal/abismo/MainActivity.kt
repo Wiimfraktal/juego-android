@@ -21,7 +21,17 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
-        view.pause()
+        view.hostPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        view.hostResume()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        view.hostDestroy()
     }
 
     @Suppress("DEPRECATION")
