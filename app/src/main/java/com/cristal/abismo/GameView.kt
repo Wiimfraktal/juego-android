@@ -64,14 +64,14 @@ class GameView(ctx: Context) : View(ctx) {
         const val COLS = 21
         const val LIFT_LOCKED = 0.30f
         const val LIFT_PIECE = 0.55f
-        const val EXPLOSION_TIME = 3.5f
+        const val EXPLOSION_TIME = 4.6f
         const val CELEB = 1.7f
-        const val HOLD = 0.9f      // la cámara se queda cerca mientras explota
+        const val HOLD = 1.7f      // la cámara se queda cerca mientras explota
         const val PULL = 2.5f      // duración del alejamiento
         const val MENU_SC = 1.9f
         const val APPROACH = 1.6f
         const val ESC0 = 1.4f
-        const val LAUNCH = 0.55f
+        const val LAUNCH = 1.5f
         const val ESC1 = 0.7f
         val BASE = intArrayOf(
             Color.rgb(0, 229, 255), Color.rgb(255, 196, 0), Color.rgb(176, 64, 255),
@@ -671,7 +671,7 @@ class GameView(ctx: Context) : View(ctx) {
 
         val near = g.nearestFilled()
         if (phase == 2 && !paused) {
-            if (celebT <= 0f) g.update(dt)
+            if (celebT <= 0f && spawnT >= LAUNCH) g.update(dt)
             consumeBursts(g)
             consumeIron(g)
             if (g.locks > seenLocks) { stats.add("ships", g.locks - seenLocks); seenLocks = g.locks; sfx.place(Factions.all[shipSel].sfx) }
@@ -785,11 +785,11 @@ class GameView(ctx: Context) : View(ctx) {
     /** Explosión dentro de la ciudad epicentro; el planeta no se rompe. */
     private fun spawnExplosion(big: Boolean) {
         val pd = cache[skinSel] ?: return
-        shake = if (big) 1.8f else 1.4f
-        flashWhite = if (big) 1.3f else 1.1f
+        shake = if (big) 2.2f else 2.0f
+        flashWhite = if (big) 1.5f else 1.4f
         val ex = ccx + pd.cities[0] * planetR * planetSc
         val ey = ccy + pd.cities[1] * planetR * planetSc
-        val n = if (big) 150 else 90
+        val n = if (big) 220 else 160
         val sp = sprWhite ?: return
         val fi = sprFire ?: return
         val rd = sprRed ?: return
@@ -806,7 +806,7 @@ class GameView(ctx: Context) : View(ctx) {
             val dx = pd.cities[it * 2] - pd.cities[0]; val dy = pd.cities[it * 2 + 1] - pd.cities[1]
             dx * dx + dy * dy
         }
-        val count = if (big) 9 else 5
+        val count = if (big) 12 else 9
         for ((j, ci) in order.take(count).withIndex()) blasts.add(Blast(ci, -0.35f - j * 0.22f, if (big) 1.5f else 1.1f))
     }
 
@@ -1199,6 +1199,43 @@ class GameView(ctx: Context) : View(ctx) {
                 c.drawBitmap(rd, null, rect, addPaint)
             }
         }
+        // bola de fuego con textura de plasma (nítida y con filamentos) que gira y se expande
+        val pl = plasmaTex
+        if (pl != null && et < 2.4f) {
+            val q = et / 2.4f
+            val r = planetR * k * (0.12f + 0.45f * (1f - (1f - q) * (1f - q)))
+            for (kk in 0 until 2) {
+                c.save(); c.rotate(et * (if (kk == 0) 25f else -40f) + kk * 90f, ex, ey)
+                rect.set(ex - r * (1f - 0.3f * kk), ey - r * (1f - 0.3f * kk), ex + r * (1f - 0.3f * kk), ey + r * (1f - 0.3f * kk))
+                addPaint.alpha = (255 * (1f - q) * (if (kk == 0) 1f else 0.8f)).toInt().coerceIn(0, 255)
+                c.drawBitmap(pl, null, rect, addPaint)
+                c.restore()
+            }
+        }
+        // onda de choque que recorre todo el planeta (anillo con textura, recortado al disco)
+        val rg = ringTex
+        if (rg != null) {
+            for (w in 0..(if (over) 2 else 1)) {
+                val t2 = et - w * 0.35f
+                val q = (t2 / 2.2f).coerceIn(0f, 1f)
+                if (t2 <= 0f || q >= 1f) continue
+                path.reset(); path.addCircle(ccx, ccy, planetR * 0.93f, Path.Direction.CW)
+                c.save(); c.clipPath(path)
+                val rr = planetR * 2.1f * (1f - (1f - q) * (1f - q)) / 0.9f
+                rect.set(ex - rr, ey - rr, ex + rr, ey + rr)
+                addPaint.alpha = ((if (w == 0) 255 else 150) * (1f - q)).toInt().coerceIn(0, 255)
+                c.drawBitmap(rg, null, rect, addPaint)
+                // la superficie se ilumina justo detrás del frente de la onda
+                val gl = sprFire
+                if (gl != null) {
+                    val r2 = rr * 0.9f
+                    rect.set(ex - r2, ey - r2, ex + r2, ey + r2)
+                    addPaint.alpha = (70 * (1f - q)).toInt()
+                    c.drawBitmap(gl, null, rect, addPaint)
+                }
+                c.restore()
+            }
+        }
         for (w in 0..(if (over) 1 else 0)) {
             val t2 = et - w * 0.7f
             val ring = (t2 / 1.8f).coerceIn(0f, 1f)
@@ -1266,9 +1303,19 @@ class GameView(ctx: Context) : View(ctx) {
                 addPaint.alpha = (255 * (1f - q) * (1f - q)).toInt().coerceIn(0, 255)
                 c.drawBitmap(gw, null, rect, addPaint)
             }
-            if (t < 0.3f) {
-                val q = t / 0.3f
-                val r = planetR * 0.08f * sz * (0.5f + q)
+            val plx = plasmaTex
+            if (plx != null && t < 1.2f) {
+                val q = t / 1.2f
+                val r = planetR * (0.04f + 0.12f * (1f - (1f - q) * (1f - q))) * sz
+                c.save(); c.rotate(t * 60f + b.city * 40f, px, py)
+                rect.set(px - r, py - r, px + r, py + r)
+                addPaint.alpha = (230 * (1f - q)).toInt().coerceIn(0, 255)
+                c.drawBitmap(plx, null, rect, addPaint)
+                c.restore()
+            }
+            if (t < 0.35f) {
+                val q = t / 0.35f
+                val r = planetR * 0.13f * sz * (0.5f + q)
                 rect.set(px - r, py - r, px + r, py + r)
                 addPaint.alpha = (255 * (1f - q)).toInt().coerceIn(0, 255)
                 c.drawBitmap(gw, null, rect, addPaint)
@@ -1382,7 +1429,6 @@ class GameView(ctx: Context) : View(ctx) {
         if (k >= 1f) return
         val wh = sprSteel ?: return
         val fire = sprFire
-        val e = 1f - (1f - k) * (1f - k)
         // destello en la superficie al despegar
         if (fire != null && k < 0.45f) {
             val r = s * (1.2f + 2f * k) * planetSc
@@ -1391,12 +1437,14 @@ class GameView(ctx: Context) : View(ctx) {
             c.drawBitmap(fire, null, rect, addPaint)
         }
         // estela del recorrido planeta → casilla
-        for (q in 0 until 10) {
-            val t = e * (q / 9f)
-            val x = ccx + (bcx - ccx) * t; val y = ccy + (bcy - ccy) * t
-            val r = s * (0.25f + 0.35f * q / 9f)
+        for (q in 0 until 14) {
+            val lq = k * (q / 13f)
+            val pe = 1f - lq
+            val x = bcx + (ccx - bcx) * pe * pe + (-(bcy - ccy)) * 0.25f * sin(lq * PI.toFloat())
+            val y = bcy + (ccy - bcy) * pe * pe + (bcx - ccx) * 0.25f * sin(lq * PI.toFloat())
+            val r = s * (0.2f + 0.4f * q / 13f)
             rect.set(x - r, y - r, x + r, y + r)
-            addPaint.alpha = (120 * (1f - k) * (q / 9f)).toInt().coerceIn(0, 255)
+            addPaint.alpha = (130 * (1f - k * 0.8f) * (q / 13f)).toInt().coerceIn(0, 255)
             c.drawBitmap(wh, null, rect, addPaint)
         }
     }
@@ -1452,7 +1500,9 @@ class GameView(ctx: Context) : View(ctx) {
         c.save()
         if (grow < 1f) {
             // sube desde el planeta: empieza pequeña y cerca del centro del planeta
-            val ox2 = (ccx - bcx) * (1f - grow) * 0.6f; val oy2 = (ccy - bcy) * (1f - grow) * 0.6f
+            val pe = 1f - lk
+            val ox2 = (ccx - bcx) * pe * pe + (-(bcy - ccy)) * 0.25f * sin(lk * PI.toFloat())
+            val oy2 = (ccy - bcy) * pe * pe + (bcx - ccx) * 0.25f * sin(lk * PI.toFloat())
             c.translate(ox2, oy2); c.scale(grow, grow, bcx, bcy)
         }
         for (layer in 0..2) drawShipSprite(c, sp, p.type, p.rot, p.cells, p.fx, p.fy, layer, hover)
