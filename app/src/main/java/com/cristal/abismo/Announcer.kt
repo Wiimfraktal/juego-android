@@ -27,15 +27,15 @@ import kotlin.math.tanh
 class Announcer(private val ctx: Context) {
     companion object {
         val PHRASES = arrayOf(
-            "Línea", "Doble línea", "Triple línea", "¡Devastación!",
-            "Racha", "Frenesí", "¡Imparable!", "¡Arrasador!", "¡Intocable!", "¡Invencible!",
-            "Detonación", "¡Demolición!", "Al límite", "Nuevo récord", "Ascenso"
+            "¡Línea!", "¡Doble línea!", "¡Triple línea!", "¡Devastación!",
+            "¡Racha!", "¡Frenesí!", "¡Imparable!", "¡Arrasador!", "¡Intocable!", "¡Invencible!",
+            "¡Detonación!", "¡Demolición!", "¡Al límite!", "¡Nuevo récord!", "¡Ascenso!"
         )
         const val LINE = 0; const val DOUBLE = 1; const val TRIPLE = 2; const val DEVAST = 3
         const val SPREE = 4; const val FRENZY = 5; const val UNSTOP = 6; const val RAMPAGE = 7
         const val UNTOUCH = 8; const val INVINC = 9; const val DETON = 10; const val DEMOL = 11
         const val LIMIT = 12; const val RECORD = 13; const val PROMO = 14
-        private const val VER = "v2"
+        private const val VER = "v3"
     }
 
     var enabled = true
@@ -68,8 +68,8 @@ class Announcer(private val ctx: Context) {
             if (chosen == null) { t.shutdown(); return }
             t.language = chosen
             pickMaleVoice(t, chosen)
-            t.setPitch(0.74f)
-            t.setSpeechRate(0.97f)
+            t.setPitch(0.64f)
+            t.setSpeechRate(0.9f)
             for (i in PHRASES.indices) {
                 val raw = File(dir, "vox_raw_$i.wav")
                 val latch = CountDownLatch(1)
@@ -146,7 +146,7 @@ class Announcer(private val ctx: Context) {
         while (b > a && abs(x0[b]) < 0.01f) b--
         if (b - a < 100) return
         // tono un poco más grave por re-muestreo (apenas más lento)
-        val ratio = 0.94f
+        val ratio = 0.92f
         val n = ((b - a) / ratio).toInt()
         val y = FloatArray(n + (0.5f * sr).toInt())
         for (i in 0 until n) {

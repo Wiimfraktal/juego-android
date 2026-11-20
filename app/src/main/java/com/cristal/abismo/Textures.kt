@@ -134,7 +134,7 @@ object Textures {
         val d2 = distField(BooleanArray(w * h) { !eroded[it] }, w, h, true)
         val lim = rr - 3f * cp / 96f
         val sil = BooleanArray(w * h) { d2[it] <= lim }
-        val d3 = distField(sil, w, h, false)
+        var d3 = distField(sil, w, h, false)
 
         // ejes de la nave: columna principal (la fila/columna con más celdas)
         val horiz = cw >= ch
@@ -152,6 +152,28 @@ object Textures {
         val aEnd = (sMax + 1) * 64f
         val cockA = aStart + 26f
         val engA = aEnd - 9f
+        // perfil de nave dentro de sus casillas: nariz en punta, alas en flecha y punta de ala recortada
+        val cut = BooleanArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = y * w + x
+            if (!sil[i]) continue
+            val lx = (x + 0.5f) * sc; val ly = (y + 0.5f) * sc
+            val along = if (horiz) lx else ly
+            val across = if (horiz) ly else lx
+            val dsp = abs(across - spine)
+            if (dsp <= 32f) {
+                // nariz: se afila en los primeros 30 px de la columna principal
+                val na = along - aStart
+                if (na < 30f && dsp > 7f + (na / 30f) * 25f) cut[i] = true
+            } else {
+                // ala: borde de ataque inclinado hacia atrás y punta recortada
+                val la = ((along % 64f) + 64f) % 64f
+                if (la < (dsp - 32f) * 0.55f) cut[i] = true
+                if (dsp > 80f && la > 50f) cut[i] = true
+            }
+        }
+        for (i in 0 until w * h) if (cut[i]) sil[i] = false
+        d3 = distField(sil, w, h, false)
         // luces de navegación en las celdas de ala (fuera de la columna)
         val navs = ArrayList<FloatArray>()
         for (r in 0 until ch) for (q in 0 until cw) {
@@ -212,7 +234,8 @@ object Textures {
         }
         for (y in 0 until h) for (x in 0 until w) {
             val i = y * w + x
-            val alpha = ((lim - d2[i]) + 1f).coerceIn(0f, 1f)
+            if (cut[i]) continue
+            val alpha = ((lim - d2[i]) + 1f).coerceIn(0f, 1f) * (d3[i] + 0.5f).coerceIn(0f, 1f)
             if (alpha <= 0f) continue
             val lx = (x + 0.5f) * sc
             val ly = (y + 0.5f) * sc

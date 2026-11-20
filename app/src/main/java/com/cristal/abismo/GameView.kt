@@ -70,6 +70,9 @@ class GameView(ctx: Context) : View(ctx) {
         const val PULL = 2.5f      // duración del alejamiento
         const val MENU_SC = 1.9f
         const val APPROACH = 1.6f
+        const val ESC0 = 1.4f
+        const val LAUNCH = 0.55f
+        const val ESC1 = 0.7f
         val BASE = intArrayOf(
             Color.rgb(0, 229, 255), Color.rgb(255, 196, 0), Color.rgb(176, 64, 255),
             Color.rgb(0, 255, 140), Color.rgb(255, 40, 150), Color.rgb(50, 110, 255),
@@ -707,12 +710,13 @@ class GameView(ctx: Context) : View(ctx) {
         val pull = ((phaseT - HOLD) / PULL).coerceIn(0f, 1f)
         if (phase == 1) {
             val e = pull * pull * (3f - 2f * pull)
-            planetSc = MENU_SC + (1f - MENU_SC) * e
+            planetSc = MENU_SC + (ESC0 - MENU_SC) * e
         } else {
             val target = when {
                 phase == 0 -> (if (tab != 0) 1.45f else MENU_SC) + 0.02f * sin(time * 0.6f)
                 g.over -> 1.45f
-                else -> 1f + 0.22f * (1f - ((near - 1) / 8f)).coerceIn(0f, 1f)
+                // escape: el planeta empieza cerca y se aleja despacio durante la partida (~6 min)
+                else -> ESC0 - (ESC0 - ESC1) * (gameTime / 360f).coerceIn(0f, 1f) + 0.18f * (1f - ((near - 1) / 8f)).coerceIn(0f, 1f)
             }
             planetSc += (target - planetSc) * min(1f, dt * 2.5f)
         }
@@ -1369,8 +1373,38 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
+    private var lastPiece: Any? = null
+    private var spawnT = 9f
+
+    /** Despegue: la nave sale del planeta como un destello que sube hasta su casilla y crece al llegar. */
+    private fun drawLaunch(c: Canvas, bcx: Float, bcy: Float) {
+        val k = (spawnT / LAUNCH).coerceIn(0f, 1f)
+        if (k >= 1f) return
+        val wh = sprSteel ?: return
+        val fire = sprFire
+        val e = 1f - (1f - k) * (1f - k)
+        // destello en la superficie al despegar
+        if (fire != null && k < 0.45f) {
+            val r = s * (1.2f + 2f * k) * planetSc
+            rect.set(ccx - r, ccy - r, ccx + r, ccy + r)
+            addPaint.alpha = (200 * (1f - k / 0.45f)).toInt().coerceIn(0, 255)
+            c.drawBitmap(fire, null, rect, addPaint)
+        }
+        // estela del recorrido planeta → casilla
+        for (q in 0 until 10) {
+            val t = e * (q / 9f)
+            val x = ccx + (bcx - ccx) * t; val y = ccy + (bcy - ccy) * t
+            val r = s * (0.25f + 0.35f * q / 9f)
+            rect.set(x - r, y - r, x + r, y + r)
+            addPaint.alpha = (120 * (1f - k) * (q / 9f)).toInt().coerceIn(0, 255)
+            c.drawBitmap(wh, null, rect, addPaint)
+        }
+    }
+
     private fun drawPiece(c: Canvas, g: Game) {
         val p = g.piece ?: return
+        if (p !== lastPiece) { lastPiece = p; spawnT = 0f }
+        if (!paused) spawnT += frameDt
         var avgx = 0f; var avgy = 0f
         for (cell in p.cells) { avgx += cell[0]; avgy += cell[1] }
         val gl = hypot(g.gx.toFloat(), g.gy.toFloat())
@@ -1412,7 +1446,17 @@ class GameView(ctx: Context) : View(ctx) {
             c.drawBitmap(fa, null, rect, addPaint)
         }
         val hover = LIFT_PIECE * (1f + 0.18f * sin(time * 2.6f))
+        drawLaunch(c, bcx, bcy)
+        val lk = (spawnT / LAUNCH).coerceIn(0f, 1f)
+        val grow = if (lk < 1f) 0.25f + 0.75f * (lk * lk * (3f - 2f * lk)) else 1f
+        c.save()
+        if (grow < 1f) {
+            // sube desde el planeta: empieza pequeña y cerca del centro del planeta
+            val ox2 = (ccx - bcx) * (1f - grow) * 0.6f; val oy2 = (ccy - bcy) * (1f - grow) * 0.6f
+            c.translate(ox2, oy2); c.scale(grow, grow, bcx, bcy)
+        }
         for (layer in 0..2) drawShipSprite(c, sp, p.type, p.rot, p.cells, p.fx, p.fy, layer, hover)
+        c.restore()
         if (p.bomb) {
             val pulse = 0.6f + 0.4f * sin(time * 9f)
             paint.style = Paint.Style.STROKE
