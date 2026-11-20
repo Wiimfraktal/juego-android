@@ -372,17 +372,17 @@ class GameView(ctx: Context) : View(ctx) {
         voiceSw.set(panelRect.left + u * 0.6f, panelRect.top + u * 4.7f, panelRect.right - u * 0.6f, panelRect.top + u * 5.8f)
         closeRect.set(w / 2f - u * 2.2f, panelRect.bottom - u * 1.8f, w / 2f + u * 2.2f, panelRect.bottom - u * 0.6f)
         escapeRect.set(w / 2f - u * 3.6f, h * 0.80f, w / 2f + u * 3.6f, h * 0.80f + u * 1.6f)
-        val tb = topInset + u * 0.45f
+        val tb = topInset + u * 0.9f
         val sw5 = (w - u * 0.8f - 4 * u * 0.12f) / 5f
         for (i in 0 until 5) {
             val x0 = u * 0.4f + i * (sw5 + u * 0.12f)
-            subRects[i].set(x0, topInset + u * 4.1f, x0 + sw5, topInset + u * 4.9f)
+            subRects[i].set(x0, mtop + u * 4.1f, x0 + sw5, mtop + u * 4.9f)
         }
         val tw3 = ((w - u * 1.65f) - u * 0.4f - 2 * u * 0.15f) / 3f
-        tabRect0.set(u * 0.4f, tb, u * 0.4f + tw3, tb + u * 0.95f)
-        tabRect1.set(tabRect0.right + u * 0.15f, tb, tabRect0.right + u * 0.15f + tw3, tb + u * 0.95f)
-        tabRect2.set(tabRect1.right + u * 0.15f, tb, tabRect1.right + u * 0.15f + tw3, tb + u * 0.95f)
-        gearC.set(w - u * 1.35f, tb, w - u * 0.4f, tb + u * 0.95f)
+        tabRect0.set(u * 0.4f, tb, u * 0.4f + tw3, tb + u * 1.3f)
+        tabRect1.set(tabRect0.right + u * 0.15f, tb, tabRect0.right + u * 0.15f + tw3, tb + u * 1.3f)
+        tabRect2.set(tabRect1.right + u * 0.15f, tb, tabRect1.right + u * 0.15f + tw3, tb + u * 1.3f)
+        gearC.set(w - u * 1.35f, tb, w - u * 0.4f, tb + u * 1.3f)
         cardW = u * 3.4f
         cardH = u * 4.3f
         gap = u * 0.3f
@@ -1140,6 +1140,8 @@ class GameView(ctx: Context) : View(ctx) {
 
     /** Giro del planeta: lento en el menú; se congela al explotar y queda fijo toda la partida. */
     private var planetAng = 0f
+    /** Desplazamiento del contenido del menú (más abajo y con pestañas más altas). */
+    private val mtop get() = topInset + u * 1.25f
     @Volatile private var spinner: Textures.Spinner? = null
     @Volatile private var spinSkin = -1
     private var spinThread: Thread? = null
@@ -2420,8 +2422,8 @@ class GameView(ctx: Context) : View(ctx) {
 
     /** Icono de lista con un signo "!" que da un saltito cada pocos segundos; al tocarlo muestra los 3 logros. */
     private fun drawAchWidget(c: Canvas, a: Float) {
-        val sz = u * 1.05f
-        achIcon.set(u * 0.45f, tabRect0.bottom + u * 0.45f, u * 0.45f + sz, tabRect0.bottom + u * 0.45f + sz)
+        val sz = u * 1.5f
+        achIcon.set(u * 0.45f, tabRect0.bottom + u * 0.4f, u * 0.45f + sz, tabRect0.bottom + u * 0.45f + sz)
         val near = nearAch()
         achAnim += ((if (achOpen) 1f else 0f) - achAnim) * min(1f, frameDt * 10f)
         val al = (255 * a).toInt()
@@ -2661,12 +2663,12 @@ class GameView(ctx: Context) : View(ctx) {
         paint.textAlign = Paint.Align.CENTER
         paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
         paint.textSize = u * 1.15f
-        c.drawText("FUGA ORBITAL", width / 2f, topInset + u * 3.1f, paint)
+        c.drawText("FUGA ORBITAL", width / 2f, mtop + u * 3.1f, paint)
         paint.textSize = u * 0.42f
         paint.color = Color.argb((210 * a).toInt(), 190, 215, 255)
-        c.drawText("Aleja las naves del centro antes de que lleguen", width / 2f, topInset + u * 3.9f, paint)
+        c.drawText("Aleja las naves del centro antes de que lleguen", width / 2f, mtop + u * 3.9f, paint)
         drawRankBlock(c, a)
-        Emblem.draw(c, paint, width - u * 1.4f, topInset + u * 6.4f, u * 1.6f, emShape, emSym, Emblem.palette[emBg], Emblem.palette[emC1], Emblem.palette[emC2], a)
+        Emblem.draw(c, paint, width - u * 1.4f, mtop + u * 6.4f, u * 1.6f, emShape, emSym, Emblem.palette[emBg], Emblem.palette[emC1], Emblem.palette[emC2], a)
         paint.textAlign = Paint.Align.CENTER
         paint.color = Color.argb((220 * a).toInt(), 255, 255, 255)
         c.drawText("Récord: $best      Lingotes: $totalIngots", width / 2f, escapeRect.top - u * 0.7f, paint)
@@ -2719,12 +2721,12 @@ class GameView(ctx: Context) : View(ctx) {
         paint.textAlign = Paint.Align.CENTER
         paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
         paint.textSize = u * 0.62f
-        c.drawText(arrayOf("Superficies de planeta", "Modelos de nave", "Emblema del piloto", "Fondos espaciales", "Temas musicales")[subTab], width / 2f, topInset + u * 2.6f, paint)
+        c.drawText(arrayOf("Superficies de planeta", "Modelos de nave", "Emblema del piloto", "Fondos espaciales", "Temas musicales")[subTab], width / 2f, mtop + u * 2.6f, paint)
         paint.textSize = u * 0.5f
         val label = "$totalIngots"
         val tw = paint.measureText(label)
-        drawIngot(c, width / 2f - tw / 2f - u * 0.5f, topInset + u * 3.35f, u * 0.7f)
-        c.drawText(label, width / 2f + u * 0.2f, topInset + u * 3.55f, paint)
+        drawIngot(c, width / 2f - tw / 2f - u * 0.5f, mtop + u * 3.35f, u * 0.7f)
+        c.drawText(label, width / 2f + u * 0.2f, mtop + u * 3.55f, paint)
         // sub-pestañas
         val subNames = arrayOf("Superficies", "Naves", "Emblema", "Fondos", "Música")
         for (i in 0 until 5) {
@@ -3184,7 +3186,7 @@ class GameView(ctx: Context) : View(ctx) {
     private fun fmtTime(sec: Int): String = if (sec >= 3600) "${sec / 3600} h ${(sec % 3600) / 60} min" else "${sec / 60} min ${sec % 60} s"
 
     private fun drawProfileTab(c: Canvas, a: Float) {
-        val top = topInset + u * 1.75f
+        val top = mtop + u * 1.75f
         val bottom = height - u * 0.3f
         paint.style = Paint.Style.FILL
         paint.color = Color.argb((215 * a).toInt(), 6, 9, 22)
@@ -3413,7 +3415,7 @@ class GameView(ctx: Context) : View(ctx) {
         val idx = Ranks.indexFor(totalBars)
         val rk = Ranks.all[idx]
         val next = if (idx + 1 < Ranks.all.size) Ranks.all[idx + 1] else null
-        val cy = topInset + u * 6.4f
+        val cy = mtop + u * 6.4f
         drawInsignia(c, width / 2f - u * 3.2f, cy, u * 1.9f, rk, a)
         paint.style = Paint.Style.FILL
         paint.textAlign = Paint.Align.LEFT
