@@ -147,6 +147,12 @@ class GameView(ctx: Context) : View(ctx) {
     private val sfxSw = RectF()
     private val closeRect = RectF()
     private var settingsOpen = false
+    private var settingsAnim = 0f
+    private var pauseAnim = 0f
+    private var prevTab = 0
+    private var tabT = 1f
+    private var tabDir = 1f
+    private var celebT = 0f
     private var time = 0f
     private var shake = 0f
     private var starSpeed = 0.12f
@@ -250,6 +256,7 @@ class GameView(ctx: Context) : View(ctx) {
         preview = skinSel
         seenIngots = 0; seenBars = 0; dispFrac = 0f; seenLocks = 0
         settingsOpen = false
+        settingsAnim = 0f; pauseAnim = 0f; tabT = 1f; celebT = 0f
         newRecord = false; overHandled = false
         paused = false
         alert = 0f; flashWhite = 0f
@@ -421,16 +428,22 @@ class GameView(ctx: Context) : View(ctx) {
         // música: calmada en carga y menú, épica en partida (vuelve a la calmada tras perder)
         music.play(if (phase <= 0 || (phase == 2 && g.over && g.overTime > 1.5f)) 0 else 1)
         music.duck = if (paused) 0.35f else 1f
-        music.update(min(0.05f, (now - lastMusic) / 1e9f))
+        val rdt = min(0.05f, (now - lastMusic) / 1e9f)
+        music.update(rdt)
         lastMusic = now
+        pauseAnim += ((if (paused) 1f else 0f) - pauseAnim) * min(1f, rdt * 11f)
+        settingsAnim += ((if (settingsOpen) 1f else 0f) - settingsAnim) * min(1f, rdt * 11f)
+        tabT = min(1f, tabT + rdt / 0.32f)
+        celebT = max(0f, celebT - dt)
 
         val near = g.nearestFilled()
         if (phase == 2 && !paused) {
-            g.update(dt)
+            if (celebT <= 0f) g.update(dt)
             consumeBursts(g)
             consumeIron(g)
             if (g.locks > seenLocks) { seenLocks = g.locks; sfx.place() }
-            emitThrust(g)
+            if (celebT <= 0f) emitThrust(g)
+            if (celebT > 0f) emitWeld(dt)
             updateBar(g, dt)
             if (g.over && !overHandled) finishGame(g)
         }
@@ -495,7 +508,7 @@ class GameView(ctx: Context) : View(ctx) {
             paint.color = Color.argb((235 * min(1f, flashWhite)).toInt(), 255, 245, 225)
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
         }
-        if (paused) drawPause(canvas)
+        if (pauseAnim > 0.01f) drawPause(canvas)
         postInvalidateOnAnimation()
     }
 
@@ -543,6 +556,7 @@ class GameView(ctx: Context) : View(ctx) {
         if (g.barsFilled > seenBars) {
             seenBars = g.barsFilled
             barFlash = 1f
+            celebT = 1.3f
             dispFrac = 0f
         }
         val frac = g.barProgress / g.barNeed().toFloat()
@@ -1011,7 +1025,7 @@ class GameView(ctx: Context) : View(ctx) {
         val tl = ships ?: return
         val gl = glows ?: return
         for (layer in 0..2) {
-            val f = when (layer) { 0 -> 0f; 1 -> lift * 0.5f; else -> lift }
+            val f = when (layer) { 0 -> -lift; 1 -> -lift * 0.5f; else -> 0f }
             val pt = when (layer) { 0 -> dark1; 1 -> dark2; else -> bmpPaint }
             for (i in 0 until n) {
                 val x0 = ox + (xs[i] + offX) * s
@@ -1023,8 +1037,8 @@ class GameView(ctx: Context) : View(ctx) {
         for (i in 0 until n) {
             val x0 = ox + (xs[i] + offX) * s
             val y0 = oy + (ys[i] + offY) * s
-            val tx0 = proj(x0, ccx, lift); val tx1 = proj(x0 + s, ccx, lift)
-            val ty0 = proj(y0, ccy, lift); val ty1 = proj(y0 + s, ccy, lift)
+            val tx0 = x0; val tx1 = x0 + s
+            val ty0 = y0; val ty1 = y0 + s
             val pulse = 0.75f + 0.25f * sin(time * 3f + xs[i] * 1.3f + ys[i] * 0.7f)
             val gcx = (tx0 + tx1) / 2f; val gcy = (ty0 + ty1) / 2f
             val gr = s * 1.3f
@@ -1077,6 +1091,74 @@ class GameView(ctx: Context) : View(ctx) {
             c.drawRoundRect(rect, sz * 0.2f, sz * 0.2f, paint)
             c.restore()
         }
+    }
+
+    private fun perimeterPoint(l: Float, t: Float, r: Float, b: Float, k: Float, out: FloatArray) {
+        val w = r - l
+        val h = b - t
+        val d = (k - floor(k)) * 2f * (w + h)
+        if (d < w) { out[0] = l + d; out[1] = t }
+        else if (d < w + h) { out[0] = r; out[1] = t + d - w }
+        else if (d < 2f * w + h) { out[0] = r - (d - w - h); out[1] = b }
+        else { out[0] = l; out[1] = b - (d - 2f * w - h) }
+    }
+
+    private val weldPt = FloatArray(2)
+
+    /** Chispas del punto de soldadura que recorre la barra mientras el juego está congelado. */
+    private fun emitWeld(dt: Float) {
+        val wh = sprWhite ?: return
+        val fi = sprFire ?: return
+        val ck = 1f - celebT / 1.3f
+        val cy = (barY0 + barY1) / 2f
+        val hh = (barY1 - barY0) / 2f * (1f + 0.22f * sin(PI.toFloat() * min(1f, ck * 1.5f)))
+        for (i in 0 until 3) {
+            perimeterPoint(barX0, cy - hh, barX1, cy + hh, ck * 1.6f + i / 3f, weldPt)
+            repeat(2) {
+                val a = Random.nextFloat() * 6.283f
+                val v = u * (0.8f + Random.nextFloat() * 2.2f)
+                sparks.add(Spark(weldPt[0], weldPt[1], cos(a) * v, sin(a) * v - u * 0.6f, 0.35f, 0.35f,
+                    if (it == 0) wh else fi, u * (0.05f + Random.nextFloat() * 0.06f)))
+            }
+        }
+    }
+
+    /** Contorno cálido tenue y puntos de soldadura alrededor de la barra al completarse. */
+    private fun drawWeld(c: Canvas, ck: Float, pulseE: Float, bsx: Float, bsy: Float) {
+        val wh = sprWhite ?: return
+        val fi = sprFire ?: return
+        val cx = (barX0 + barX1) / 2f
+        val cy = (barY0 + barY1) / 2f
+        val hw = (barX1 - barX0) / 2f * bsx
+        val hh = (barY1 - barY0) / 2f * bsy
+        val fade = (1f - ck).coerceIn(0f, 1f)
+        val flick = 0.6f + 0.4f * sin(time * 40f)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = 3f
+        paint.color = Color.argb((110 * pulseE * flick).toInt().coerceIn(0, 255), 255, 205, 130)
+        rect.set(cx - hw, cy - hh, cx + hw, cy + hh)
+        c.drawRoundRect(rect, u * 0.25f, u * 0.25f, paint)
+        paint.style = Paint.Style.FILL
+        for (i in 0 until 3) {
+            perimeterPoint(cx - hw, cy - hh, cx + hw, cy + hh, ck * 1.6f + i / 3f, weldPt)
+            var r = u * 0.55f
+            rect.set(weldPt[0] - r, weldPt[1] - r, weldPt[0] + r, weldPt[1] + r)
+            addPaint.alpha = (140 * fade * flick).toInt().coerceIn(0, 255)
+            c.drawBitmap(fi, null, rect, addPaint)
+            r = u * 0.26f
+            rect.set(weldPt[0] - r, weldPt[1] - r, weldPt[0] + r, weldPt[1] + r)
+            addPaint.alpha = (235 * fade).toInt().coerceIn(0, 255)
+            c.drawBitmap(wh, null, rect, addPaint)
+        }
+    }
+
+    private fun switchTab(n: Int) {
+        if (n == tab) return
+        prevTab = tab
+        tabDir = if (n > tab) 1f else -1f
+        tab = n
+        tabT = 0f
+        if (n == 1) { preview = skinSel; requestSkin(preview) }
     }
 
     private fun drawIngot(c: Canvas, cx: Float, cy: Float, w: Float) {
@@ -1172,9 +1254,21 @@ class GameView(ctx: Context) : View(ctx) {
             paint.textSize = u * 0.4f
             c.drawText(if (i == 0) "MENÚ" else "PERSONALIZAR", r.centerX(), r.centerY() + u * 0.14f, paint)
         }
-        if (tab == 0) drawPlayTab(c, a) else drawSkinTab(c, a)
+        val e = tabT * tabT * (3f - 2f * tabT)
+        if (e < 1f) {
+            c.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), (255 * (1f - e)).toInt())
+            c.translate(-tabDir * width * 0.18f * e, 0f)
+            if (prevTab == 0) drawPlayTab(c, a) else drawSkinTab(c, a)
+            c.restore()
+            c.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), (255 * e).toInt())
+            c.translate(tabDir * width * 0.18f * (1f - e), 0f)
+            if (tab == 0) drawPlayTab(c, a) else drawSkinTab(c, a)
+            c.restore()
+        } else {
+            if (tab == 0) drawPlayTab(c, a) else drawSkinTab(c, a)
+        }
         drawGear(c, a)
-        if (settingsOpen) drawSettings(c)
+        if (settingsAnim > 0.01f) drawSettings(c)
     }
 
     private fun drawGear(c: Canvas, a: Float) {
@@ -1221,6 +1315,15 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun drawSettings(c: Canvas) {
+        val an = settingsAnim.coerceIn(0f, 1f)
+        c.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), (255 * an).toInt())
+        val sc = 0.88f + 0.12f * an
+        c.scale(sc, sc, width / 2f, height / 2f)
+        drawSettingsBody(c)
+        c.restore()
+    }
+
+    private fun drawSettingsBody(c: Canvas) {
         paint.style = Paint.Style.FILL
         paint.color = Color.argb(190, 0, 0, 10)
         c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
@@ -1286,7 +1389,7 @@ class GameView(ctx: Context) : View(ctx) {
         paint.textAlign = Paint.Align.CENTER
         paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
         paint.textSize = u * 0.62f
-        c.drawText("Skins de planeta", width / 2f, topInset + u * 2.6f, paint)
+        c.drawText("Superficies de planeta", width / 2f, topInset + u * 2.6f, paint)
         paint.textSize = u * 0.5f
         val label = "$totalIngots"
         val tw = paint.measureText(label)
@@ -1372,7 +1475,7 @@ class GameView(ctx: Context) : View(ctx) {
             owned = owned or (1 shl i)
             try { prefs.edit().putInt("ingots", totalIngots).putInt("owned", owned).apply() } catch (e: Exception) { }
             equip(i)
-            say("Skin comprada")
+            say("Superficie comprada")
         }
     }
 
@@ -1403,6 +1506,12 @@ class GameView(ctx: Context) : View(ctx) {
         rect.set(pauseRect.centerX() + u * 0.06f, top - u * 0.38f, pauseRect.centerX() + u * 0.17f, top - u * 0.02f)
         c.drawRoundRect(rect, u * 0.03f, u * 0.03f, paint)
 
+        val ck = if (celebT > 0f) 1f - celebT / 1.3f else 0f
+        val pulseE = if (celebT > 0f) sin(PI.toFloat() * min(1f, ck * 1.5f)) else 0f
+        val bsx = 1f + 0.012f * pulseE
+        val bsy = 1f + 0.22f * pulseE
+        c.save()
+        c.scale(bsx, bsy, (barX0 + barX1) / 2f, (barY0 + barY1) / 2f)
         rect.set(barX0, barY0, barX1, barY1)
         paint.color = Color.argb(150, 10, 12, 30)
         c.drawRoundRect(rect, u * 0.21f, u * 0.21f, paint)
@@ -1422,9 +1531,6 @@ class GameView(ctx: Context) : View(ctx) {
             }
         }
         if (barFlash > 0f) {
-            rect.set(barX0, barY0, barX1, barY1)
-            paint.color = Color.argb((200 * barFlash).toInt(), 255, 255, 255)
-            c.drawRoundRect(rect, u * 0.21f, u * 0.21f, paint)
             paint.textAlign = Paint.Align.CENTER
             paint.textSize = u * 0.5f
             paint.color = Color.argb((255 * barFlash).toInt(), 255, 240, 160)
@@ -1440,6 +1546,8 @@ class GameView(ctx: Context) : View(ctx) {
         paint.textSize = u * 0.3f
         paint.color = Color.argb(230, 255, 255, 255)
         c.drawText("hierro ${g.barProgress} / ${g.barNeed()}", width / 2f, barY1 - u * 0.1f, paint)
+        c.restore()
+        if (celebT > 0f) drawWeld(c, ck, pulseE, bsx, bsy)
 
         if (phaseT < 7f && !g.over && !paused) {
             paint.textSize = u * 0.42f
@@ -1470,6 +1578,17 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun drawPause(c: Canvas) {
+        val an = pauseAnim.coerceIn(0f, 1f)
+        c.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), (255 * an).toInt())
+        val sc = 0.9f + 0.1f * an
+        c.save()
+        c.scale(sc, sc, width / 2f, height / 2f)
+        drawPauseBody(c)
+        c.restore()
+        c.restore()
+    }
+
+    private fun drawPauseBody(c: Canvas) {
         paint.style = Paint.Style.FILL
         paint.shader = null
         paint.color = Color.argb(248, 4, 6, 16)
@@ -1509,7 +1628,7 @@ class GameView(ctx: Context) : View(ctx) {
                     if (hypot(e.x - sx, e.y - sy) > u * 0.3f) moved = true
                     return true
                 }
-                if (phase != 2 || paused || downOnPause || g.over) { lx = e.x; ly = e.y; return true }
+                if (phase != 2 || paused || downOnPause || g.over || celebT > 0f) { lx = e.x; ly = e.y; return true }
                 g.drag((e.x - lx) / s, (e.y - ly) / s)
                 lx = e.x; ly = e.y
                 if (hypot(e.x - sx, e.y - sy) > s * 0.4f) moved = true
@@ -1529,8 +1648,8 @@ class GameView(ctx: Context) : View(ctx) {
                     } else if (closeRect.contains(e.x, e.y) || !panelRect.contains(e.x, e.y)) settingsOpen = false
                 } else if (phase == 0) {
                     if (gearC.contains(sx, sy) && gearC.contains(e.x, e.y)) { settingsOpen = true; return true }
-                    if (tabRect0.contains(sx, sy) && tabRect0.contains(e.x, e.y)) { tab = 0; return true }
-                    if (tabRect1.contains(sx, sy) && tabRect1.contains(e.x, e.y)) { tab = 1; preview = skinSel; requestSkin(preview); return true }
+                    if (tabRect0.contains(sx, sy) && tabRect0.contains(e.x, e.y)) { switchTab(0); return true }
+                    if (tabRect1.contains(sx, sy) && tabRect1.contains(e.x, e.y)) { switchTab(1); return true }
                     if (tab == 0) {
                         if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
                     } else {
@@ -1553,6 +1672,8 @@ class GameView(ctx: Context) : View(ctx) {
                     paused = true
                 } else if (g.over) {
                     if (g.overTime > 1.9f) layoutGame()
+                } else if (celebT > 0f) {
+                    // la barra completada congela el juego un instante
                 } else if (!moved && dist < s * 0.6f && dt < 300) {
                     g.rotate()
                 } else if (dt < 180 && dist > s * 3f && (tx * g.gx + ty * g.gy) > 0.7f * dist) {

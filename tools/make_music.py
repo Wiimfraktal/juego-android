@@ -174,7 +174,7 @@ class Mix:
         self.L[i:i + len(sig)] += sig * gl
         self.R[i:i + len(sig)] += sig * gr
 
-    def finish(self, wet=0.38, rt60=3.4, peak=0.89):
+    def finish(self, wet=0.38, rt60=3.4, peak=0.89, bass=0.9):
         n = len(self.L)
         ir_len = int(rt60 * SR)
         t = np.arange(ir_len) / SR
@@ -192,7 +192,13 @@ class Mix:
             fs = np.fft.rfft(sig, size)
             fi = np.fft.rfft(ir, size)
             wetsig = np.fft.irfft(fs * fi, size)[:n]
-            outs.append(sig * (1 - wet * 0.5) + wetsig * wet * 2.2)
+            mix = sig * (1 - wet * 0.5) + wetsig * wet * 2.2
+            fm = np.fft.rfft(mix, size)
+            fr = np.fft.rfftfreq(size, 1 / SR)
+            hp = (fr / 35.0) ** 4 / (1 + (fr / 35.0) ** 4)  # quita el subgrave inaudible
+            lows = np.fft.irfft(fm * hp / (1 + (fr / 220.0) ** 4), size)[:n]  # banda 35-220 Hz
+            base = np.fft.irfft(fm * hp, size)[:n]
+            outs.append(base + bass * lows)
         L, R = outs
         # bucle sin costura: la cola de reverb se pliega al inicio
         main = self.n
@@ -222,7 +228,7 @@ def chord_notes(root, third):
     return [root + 12, root + 19, root + 24, root + third + 24]
 
 
-def section(freq, dur, a=1.2, r=1.6, fc=1700.0, ens=7, nh=26, depth=0.0035):
+def section(freq, dur, a=1.2, r=1.6, fc=1700.0, ens=7, nh=26, depth=0.0035, scoop=0.0):
     """Cuerdas de orquesta: muchas voces con vibrato propio y resonancia de cuerpo."""
     n = int(dur * SR)
     out = np.zeros(n)
@@ -233,6 +239,8 @@ def section(freq, dur, a=1.2, r=1.6, fc=1700.0, ens=7, nh=26, depth=0.0035):
         drift = np.convolve(drift, np.ones(400) / 400, mode="same")
         f = vibrato(n, freq * det, rate=RNG.uniform(4.6, 5.8), depth=depth * RNG.uniform(0.7, 1.3),
                     delay=RNG.uniform(0.3, 1.0)) * (1 + drift)
+        if scoop:
+            f = f * 2 ** (-scoop / 12.0 * np.exp(-np.arange(n) / SR / 0.14))
         ph = phase_of(f)
         sig = np.zeros(n)
         for k in ks:
@@ -247,6 +255,12 @@ def section(freq, dur, a=1.2, r=1.6, fc=1700.0, ens=7, nh=26, depth=0.0035):
     bow = np.convolve(RNG.normal(0, 1, n), np.ones(8) / 8, mode="same") * 0.01
     out = out / max(1e-9, np.max(np.abs(out)))
     return (out + bow) * adsr(n, a, r)
+
+
+def sub(freq, dur, a=2.0, r=2.4):
+    n = int(dur * SR)
+    ph = phase_of(vibrato(n, freq, rate=0.3, depth=0.0008, delay=0.1))
+    return (np.sin(ph) + 0.8 * np.sin(2 * ph) + 0.5 * np.sin(3 * ph)) * adsr(n, a, r)
 
 
 def horn(freq, dur, a=0.45, r=0.9, ens=3):
@@ -291,29 +305,37 @@ def swell(dur=3.2):
     return hp * env
 
 
-# ------------------------------------------------------------------ menú: orquesta y coro, solemne
+# ------------------------------------------------------------------ menú: orquesta, coro y graves, emotivo
+EXT = [14, 11, 14, 14, 14, 11, 10, 10]  # novena/séptima de cada acorde
+
+
 def menu_theme():
-    beat = 1.0
-    total = 64.0
-    m = Mix(total, tail=5.0)
+    beat = 1.1
+    total = 64 * beat
+    m = Mix(total, tail=5.5)
     chords = [(45, 3), (41, 4), (48, 4), (43, 4), (45, 3), (41, 4), (38, 3), (40, 4)]  # 8 tiempos c/u
     for ci, (root, third) in enumerate(chords):
         t0 = ci * 8 * beat
-        dur = 8 * beat + 2.6
-        m.add(t0, section(midi(root - 12), dur, a=2.0, r=2.4, fc=600, ens=4), 0.30)
-        m.add(t0, section(midi(root), dur, a=2.0, r=2.4, fc=900, ens=5), 0.30, pan=-0.25)
-        m.add(t0, section(midi(root + 19), dur, a=2.0, r=2.4, fc=1500, ens=5), 0.20, pan=0.2)
-        m.add(t0, section(midi(root + third + 12), dur, a=2.0, r=2.4, fc=1500, ens=5), 0.20, pan=-0.1)
+        dur = 8 * beat + 2.8
+        m.add(t0, sub(midi(root - 12), dur), 0.14)
+        m.add(t0, section(midi(root - 12), dur, a=2.2, r=2.6, fc=520, ens=5), 0.40)
+        m.add(t0, section(midi(root), dur, a=2.2, r=2.6, fc=850, ens=5), 0.32, pan=-0.25)
+        m.add(t0, section(midi(root + 19), dur, a=2.2, r=2.6, fc=1500, ens=5), 0.19, pan=0.2)
+        m.add(t0, section(midi(root + third + 12), dur, a=2.2, r=2.6, fc=1500, ens=5), 0.19, pan=-0.1)
+        m.add(t0 + 1.5 * beat, section(midi(root + EXT[ci] + 12), dur - 2 * beat, a=2.6, r=2.6, fc=1800, ens=5), 0.12, pan=0.35)
         if ci >= 1:
-            m.add(t0 + 0.4, section(midi(root + 24), dur, a=2.4, r=2.6, fc=2800, ens=8), 0.19, pan=-0.4)
-            m.add(t0 + 0.4, section(midi(root + third + 24), dur, a=2.4, r=2.6, fc=2800, ens=8), 0.16, pan=0.4)
+            m.add(t0 + 0.4, section(midi(root + 24), dur, a=2.6, r=2.8, fc=2800, ens=8), 0.18, pan=-0.4)
+            m.add(t0 + 0.4, section(midi(root + third + 24), dur, a=2.6, r=2.8, fc=2800, ens=8), 0.15, pan=0.4)
+        # coro de bajos y voces medias
+        m.add(t0, voice(midi(root - 12), dur, OH, a=2.4, r=2.8, ens=5, vowel2=AH), 0.18, pan=0.0)
         for j, nt in enumerate(chord_notes(root, third)[:3]):
-            m.add(t0, voice(midi(nt - 12), dur, [OH, AH, OH][j], a=2.2, r=2.6, ens=5, vowel2=AH), 0.12, pan=-0.5 + 0.5 * j)
+            m.add(t0, voice(midi(nt - 12), dur, [OH, AH, OH][j], a=2.4, r=2.8, ens=5, vowel2=AH), 0.12, pan=-0.5 + 0.5 * j)
         if ci >= 2:
-            tones = [root + 12, root + third + 12, root + 19, root + 24, root + third + 24, root + 31]
+            tones = [root + 12, root + third + 12, root + 19, root + 24, root + EXT[ci] + 12, root + 31]
             for k in range(8):
-                m.add(t0 + k * beat, pluck(midi(tones[[0, 1, 2, 3, 4, 3, 2, 1][k]]), 3.6, 1.3), 0.06, pan=-0.5 + 0.14 * k)
-    mel = [(76, 8, 2), (74, 10, 1), (72, 11, 1), (71, 12, 2), (69, 14, 2),
+                m.add(t0 + k * beat, pluck(midi(tones[[0, 1, 2, 3, 4, 3, 2, 1][k]]), 3.8, 1.2), 0.055, pan=-0.5 + 0.14 * k)
+        m.add(t0, timpani(midi(root - 24), 4.0, 1.5), 0.30)
+    mel = [(76, 8, 3), (74, 11, 1), (72, 12, 1), (71, 13, 2), (69, 15, 1),
            (76, 16, 3), (79, 19, 1), (76, 20, 2), (74, 22, 2),
            (74, 24, 2), (71, 26, 1), (74, 27, 1), (79, 28, 4),
            (69, 32, 1), (72, 33, 1), (76, 34, 2), (76, 36, 2), (72, 38, 2),
@@ -322,57 +344,67 @@ def menu_theme():
            (71, 56, 2), (68, 58, 2), (76, 60, 4)]
     for nt, b, d in mel:
         if b < 32:
-            m.add(b * beat, section(midi(nt), d * beat + 1.0, a=0.5, r=1.2, fc=3200, ens=4, depth=0.006), 0.22, pan=0.15)
+            m.add(b * beat, section(midi(nt - 12), d * beat + 1.2, a=0.5, r=1.4, fc=2400, ens=3, depth=0.009, scoop=1.0), 0.28, pan=0.15)
+            m.add(b * beat, section(midi(nt), d * beat + 1.2, a=0.6, r=1.4, fc=3200, ens=4, depth=0.008, scoop=0.8), 0.14, pan=0.25)
         else:
-            m.add(b * beat, horn(midi(nt - 12), d * beat + 0.9, a=0.5, r=1.0), 0.26, pan=0.1)
-    m.add(32 * beat, timpani(midi(33)), 0.35)
-    m.add(48 * beat, timpani(midi(33)), 0.30)
-    for i, tt in enumerate([60, 60.5, 61, 61.5, 62, 62.3, 62.6, 62.9]):
-        m.add(tt * beat, timpani(midi(40), 1.8, 3.4), 0.12 + 0.03 * i)
-    m.add(30 * beat, swell(), 0.06)
-    return m.finish(wet=0.46, rt60=5.0)
+            m.add(b * beat, horn(midi(nt - 12), d * beat + 1.0, a=0.55, r=1.1), 0.24, pan=0.1)
+            m.add(b * beat, section(midi(nt), d * beat + 1.2, a=0.6, r=1.4, fc=3400, ens=6, depth=0.008, scoop=0.8), 0.18, pan=-0.2)
+    m.add(32 * beat, timpani(midi(33), 3.5, 1.8), 0.40)
+    m.add(48 * beat, timpani(midi(33), 3.5, 1.8), 0.36)
+    for i, tt in enumerate([60, 60.6, 61.2, 61.8, 62.3, 62.7, 63.0, 63.3]):
+        m.add(tt * beat, timpani(midi(40), 1.8, 3.2), 0.12 + 0.03 * i)
+    m.add(30 * beat, swell(), 0.05)
+    return m.finish(wet=0.46, rt60=5.2, bass=0.35)
 
 
-# ------------------------------------------------------------------ partida: orquesta épica, sin ritmos electrónicos
+# ------------------------------------------------------------------ partida: orquesta épica con graves
 def game_theme():
-    beat = 60.0 / 84
+    beat = 60.0 / 76
     total = 96 * beat
     m = Mix(total, tail=3.5)
     chords = [(45, 3), (41, 4), (48, 4), (43, 4), (45, 3), (41, 4), (43, 4), (40, 4),
               (45, 3), (41, 4), (43, 4), (40, 4)]  # 8 tiempos c/u
     for ci, (root, third) in enumerate(chords):
         t0 = ci * 8 * beat
-        dur = 8 * beat + 2.0
-        m.add(t0, section(midi(root - 12), dur, a=1.2, r=1.8, fc=650, ens=4), 0.32)
-        m.add(t0, section(midi(root), dur, a=1.2, r=1.8, fc=950, ens=5), 0.30, pan=-0.25)
-        m.add(t0, section(midi(root + 19), dur, a=1.2, r=1.8, fc=1600, ens=5), 0.20, pan=0.2)
-        m.add(t0, section(midi(root + third + 12), dur, a=1.2, r=1.8, fc=1600, ens=5), 0.20, pan=-0.1)
+        dur = 8 * beat + 2.2
+        ext = [14, 11, 14, 14, 14, 11, 14, 10, 14, 11, 14, 10][ci]
+        m.add(t0, sub(midi(root - 12), dur, a=1.2, r=2.0), 0.16)
+        m.add(t0, section(midi(root - 12), dur, a=1.2, r=1.8, fc=560, ens=5), 0.40)
+        m.add(t0, section(midi(root), dur, a=1.2, r=1.8, fc=900, ens=5), 0.30, pan=-0.25)
+        m.add(t0, section(midi(root + 19), dur, a=1.2, r=1.8, fc=1600, ens=5), 0.19, pan=0.2)
+        m.add(t0, section(midi(root + third + 12), dur, a=1.2, r=1.8, fc=1600, ens=5), 0.19, pan=-0.1)
+        m.add(t0 + beat, section(midi(root + ext + 12), dur - 1.5 * beat, a=1.8, r=2.0, fc=1800, ens=5), 0.11, pan=0.35)
         if ci >= 2:
-            m.add(t0 + 0.2, section(midi(root + 24), dur, a=1.6, r=2.0, fc=3000, ens=8), 0.19, pan=-0.4)
-            m.add(t0 + 0.2, section(midi(root + third + 24), dur, a=1.6, r=2.0, fc=3000, ens=8), 0.16, pan=0.4)
+            m.add(t0 + 0.2, section(midi(root + 24), dur, a=1.6, r=2.0, fc=3000, ens=8), 0.18, pan=-0.4)
+            m.add(t0 + 0.2, section(midi(root + third + 24), dur, a=1.6, r=2.0, fc=3000, ens=8), 0.15, pan=0.4)
         if ci >= 4:
-            m.add(t0, horn(midi(root + 12), dur, a=0.7, r=1.2), 0.20, pan=-0.3)
+            m.add(t0, horn(midi(root), dur, a=0.7, r=1.2), 0.24, pan=-0.3)
+            m.add(t0, horn(midi(root + 12), dur, a=0.7, r=1.2), 0.20, pan=0.0)
             m.add(t0, horn(midi(root + 19), dur, a=0.7, r=1.2), 0.17, pan=0.3)
-        if ci >= 6:
+        m.add(t0, voice(midi(root - 12), dur, OH, a=1.4, r=2.2, ens=5, vowel2=AH), 0.16)
+        if ci >= 5:
             for j, nt in enumerate(chord_notes(root, third)[:4]):
                 m.add(t0, voice(midi(nt - 12), dur, [OH, AH, OH, EH][j], a=1.2, r=2.0, ens=5, vowel2=AH), 0.12, pan=-0.5 + 0.33 * j)
-        m.add(t0, timpani(midi(root - 12)), 0.45 if ci >= 2 else 0.3)
+        # golpes graves en cada cambio de acorde
+        m.add(t0, timpani(midi(root - 24), 4.0, 1.7), 0.55 if ci >= 2 else 0.38)
+        m.add(t0, timpani(midi(root - 12)), 0.40 if ci >= 2 else 0.28)
         m.add(t0 + 4 * beat, timpani(midi(root - 12)), 0.22)
         if ci >= 6:
             for k in (2, 6):
-                m.add(t0 + k * beat, timpani(midi(root - 12), 2.0, 3.2), 0.16)
+                m.add(t0 + k * beat, timpani(midi(root - 12), 2.0, 3.0), 0.16)
         if ci in (3, 7):
-            m.add(t0 + 4.5 * beat, swell(), 0.07)
-    motif = [(69, 0, 1), (72, 1, 1), (76, 2, 2), (74, 4, 1), (72, 5, 1), (69, 6, 2),
+            m.add(t0 + 4.5 * beat, swell(), 0.06)
+    motif = [(69, 0, 2), (72, 2, 1), (76, 3, 2), (74, 5, 1), (72, 6, 2),
              (72, 8, 1), (77, 9, 1), (81, 10, 2), (79, 12, 2), (76, 14, 2),
              (74, 16, 1), (79, 17, 1), (83, 18, 2), (81, 20, 2), (79, 22, 2),
              (76, 24, 2), (74, 26, 1), (71, 27, 1), (68, 28, 4)]
     for base in (32, 64):
         for nt, b, d in motif:
-            m.add((base + b) * beat, section(midi(nt), d * beat + 0.7, a=0.12, r=0.6, fc=3400, ens=5, depth=0.005), 0.22, pan=0.1)
+            m.add((base + b) * beat, section(midi(nt - 12), d * beat + 0.9, a=0.25, r=0.9, fc=2600, ens=4, depth=0.008, scoop=0.9), 0.24, pan=0.1)
+            m.add((base + b) * beat, section(midi(nt), d * beat + 0.8, a=0.3, r=0.8, fc=3400, ens=6, depth=0.007, scoop=0.7), 0.16, pan=-0.1)
             if base == 64:
-                m.add((base + b) * beat, horn(midi(nt - 12), d * beat + 0.7, a=0.2, r=0.7), 0.16, pan=-0.1)
-    return m.finish(wet=0.36, rt60=3.4)
+                m.add((base + b) * beat, horn(midi(nt - 12), d * beat + 0.8, a=0.2, r=0.8), 0.16, pan=-0.1)
+    return m.finish(wet=0.36, rt60=3.6, bass=0.3)
 
 
 def place_sfx():

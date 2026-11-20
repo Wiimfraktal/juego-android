@@ -58,6 +58,7 @@ class Game(val cols: Int, val rows: Int) {
     val ironDrops = ArrayList<IntArray>()
 
     private var contact = 0f
+    private var idle = 0f
     /** Naves fijadas hasta ahora (la vista lo usa para el sonido de colocación). */
     var locks = 0
     private var nextType = Random.nextInt(Shapes.all.size)
@@ -155,6 +156,7 @@ class Game(val cols: Int, val rows: Int) {
     fun drag(dx: Float, dy: Float) {
         val p = piece ?: return
         if (over) return
+        idle = 0f
         val n = max(1, Math.ceil((max(abs(dx), abs(dy)) / 0.2f).toDouble()).toInt())
         val sx = dx / n
         val sy = dy / n
@@ -226,6 +228,17 @@ class Game(val cols: Int, val rows: Int) {
     fun update(dt: Float) {
         if (over) { overTime += dt; return }
         val p = piece ?: return
+        // al soltar el dedo, la nave se alinea suavemente con la celda más cercana para encajar donde se ve
+        idle += dt
+        if (idle > 0.12f) {
+            val lat = if (gx != 0) p.fy else p.fx
+            val d = (Math.round(lat).toFloat() - lat) * min(1f, dt * 9f)
+            if (abs(d) > 1e-4f) {
+                val nx = if (gx != 0) p.fx else p.fx + d
+                val ny = if (gx != 0) p.fy + d else p.fy
+                if (!hits(p.cells, nx, ny)) { p.fx = nx; p.fy = ny }
+            }
+        }
         // lenta al nacer y cada vez más rápida hacia el borde
         val axisDist = if (gx != 0) abs(p.fx - cx) else abs(p.fy - cy)
         val half = if (gx != 0) cols / 2f else rows / 2f
