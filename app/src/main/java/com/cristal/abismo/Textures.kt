@@ -165,6 +165,20 @@ object Textures {
                 // nariz: se afila en los primeros 30 px de la columna principal
                 val na = along - aStart
                 if (na < 30f && dsp > 7f + (na / 30f) * 25f) cut[i] = true
+            } else if (type == 3 || type == 4) {
+                // S y Z: nave de doble casco sin alas; el casco lateral termina en cápsula redondeada al frente
+                val la = ((along % 64f) + 64f) % 64f
+                val cellStart = along - la
+                val front = !cellOcc.let { co ->
+                    val ca = ((if (horiz) along else across) / 64f).toInt()
+                    val cb = ((if (horiz) across else along) / 64f).toInt()
+                    val prevA = ca - 1
+                    if (horiz) prevA >= 0 && co[cb][prevA] else prevA >= 0 && co[prevA][cb]
+                }
+                if (front && cellStart >= 0f) {
+                    val dc = abs(across - ((across / 64f).toInt() + 0.5f) * 64f)
+                    if (la < 22f && dc > 6f + (la / 22f) * 26f) cut[i] = true
+                }
             } else {
                 // ala: borde de ataque inclinado hacia atrás y punta recortada
                 val la = ((along % 64f) + 64f) % 64f

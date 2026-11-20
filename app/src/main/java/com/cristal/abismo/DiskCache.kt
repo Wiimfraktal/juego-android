@@ -17,7 +17,7 @@ import java.nio.channels.FileChannel
  */
 object DiskCache {
     // subir al cambiar el aspecto o la resolución de los generadores de texturas
-    private const val VER = "v8"
+    private const val VER = "v9"
 
     private fun file(dir: File, name: String) = File(dir, "${VER}_$name")
 

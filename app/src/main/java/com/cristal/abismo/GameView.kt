@@ -3468,6 +3468,13 @@ class GameView(ctx: Context) : View(ctx) {
                 } else if (phase == 0 && palPick >= 0) {
                     paletteTap(e.x, e.y)
                 } else if (phase == 0) {
+                    // deslizar a los lados cambia de pestaña (fuera del carrusel de la tienda)
+                    val inCarousel = tab == 1 && subTab != 2 && sy > cardsTop - u && sy < cardsTop + cardH + u
+                    if (!inCarousel && abs(tx) > u * 2.2f && abs(ty) < abs(tx) * 0.6f && dt < 600) {
+                        val nt = (tab + (if (tx < 0) 1 else -1)).coerceIn(0, 2)
+                        if (nt != tab) { switchTab(nt); if (nt == 2) profScroll = 0f }
+                        return true
+                    }
                     if (gearC.contains(sx, sy) && gearC.contains(e.x, e.y)) { settingsOpen = true; return true }
                     if (tabRect0.contains(sx, sy) && tabRect0.contains(e.x, e.y)) { switchTab(0); return true }
                     if (tabRect1.contains(sx, sy) && tabRect1.contains(e.x, e.y)) { switchTab(1); return true }
