@@ -104,15 +104,15 @@ class Sfx(ctx: Context) {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
             .build()
     } catch (e: Exception) { null }
-    private val ids = IntArray(8)
-    private val ok = BooleanArray(8)
+    private val ids = IntArray(9)
+    private val ok = BooleanArray(9)
 
     init {
         try {
             pool?.setOnLoadCompleteListener { _, sampleId, status ->
                 for (i in ids.indices) if (ids[i] == sampleId) ok[i] = status == 0
             }
-            val raws = intArrayOf(R.raw.place_0, R.raw.place_1, R.raw.place_2, R.raw.place_3, R.raw.place_4, R.raw.place_5, R.raw.place_6, R.raw.bar_solo)
+            val raws = intArrayOf(R.raw.place_0, R.raw.place_1, R.raw.place_2, R.raw.place_3, R.raw.place_4, R.raw.place_5, R.raw.place_6, R.raw.bar_solo, R.raw.boom)
             for (i in raws.indices) ids[i] = pool?.load(ctx, raws[i], 1) ?: 0
         } catch (e: Exception) { }
     }
@@ -127,6 +127,12 @@ class Sfx(ctx: Context) {
     fun solo() {
         if (!ok[7]) return
         try { pool?.play(ids[7], 0.85f, 0.85f, 2, 0, 1f) } catch (e: Exception) { }
+    }
+
+    /** Estruendo al completar una línea. */
+    fun boom() {
+        if (!enabled || !ok[8]) return
+        try { pool?.play(ids[8], 0.7f, 0.7f, 2, 0, 1f) } catch (e: Exception) { }
     }
 
     fun release() { try { pool?.release() } catch (e: Exception) { } }

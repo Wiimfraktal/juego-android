@@ -9,7 +9,7 @@ import java.io.FileOutputStream
 /** Guarda en disco las texturas generadas para que las siguientes aperturas sean casi instantáneas. */
 object DiskCache {
     // subir al cambiar el aspecto de los generadores de texturas
-    private const val VER = "v5"
+    private const val VER = "v6"
 
     private fun file(dir: File, name: String) = File(dir, "${VER}_$name")
 
@@ -33,6 +33,21 @@ object DiskCache {
             file(dir, "planet_${skin}_$r.cit").writeText(pd.cities.joinToString(","))
             saveBmp(file(dir, "planet_${skin}_$r.png"), pd.bmp)
         } catch (e: Exception) { }
+    }
+
+    /** Naves completas de una facción (28 sprites). */
+    fun loadSprites(dir: File, fac: Int, n: Int): Array<Bitmap>? {
+        val arr = arrayOfNulls<Bitmap>(n)
+        for (i in 0 until n) {
+            val b = loadBmp(file(dir, "spr_${fac}_$i.png")) ?: return null
+            b.setHasMipMap(true)
+            arr[i] = b
+        }
+        return Array(n) { arr[it]!! }
+    }
+
+    fun saveSprites(dir: File, fac: Int, arr: Array<Bitmap>) {
+        for (i in arr.indices) saveBmp(file(dir, "spr_${fac}_$i.png"), arr[i])
     }
 
     fun loadNamed(dir: File, name: String): Bitmap? = loadBmp(file(dir, name))

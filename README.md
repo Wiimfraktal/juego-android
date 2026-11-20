@@ -17,3 +17,7 @@ El APK se compila solo en GitHub Actions con cada cambio en `main`.
 - Arrastrar: mueve la nave libremente (nunca hacia el centro).
 - Tocar: gira la pieza.
 - Empujón rápido hacia afuera: la lanza de golpe.
+
+## Créditos de audio
+
+La música usa grabaciones de la librería orquestal [VSCO 2 Community Edition](https://github.com/sgossner/VSCO-2-CE) de Versilian Studios (licencia CC0). Las mezclas se generan con `tools/orquesta.py`; la guitarra eléctrica es un modelo físico de cuerda definido en `tools/make_music.py`.

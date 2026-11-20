@@ -276,6 +276,264 @@ object Textures {
         return bmp
     }
 
+    /** Transformada de distancia (chaflán 1 / 1.414): distancia de cada píxel "dentro" al píxel "fuera" más cercano. */
+    private fun distField(inside: BooleanArray, w: Int, h: Int, oobInside: Boolean): FloatArray {
+        val big = 1e6f
+        val d = FloatArray(w * h) { if (inside[it]) big else 0f }
+        val ob = if (oobInside) big else 0f
+        fun at(x: Int, y: Int) = if (x < 0 || y < 0 || x >= w || y >= h) ob else d[y * w + x]
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = y * w + x
+            if (d[i] == 0f) continue
+            var v = d[i]
+            v = min(v, at(x - 1, y) + 1f)
+            v = min(v, at(x, y - 1) + 1f)
+            v = min(v, at(x - 1, y - 1) + 1.4142f)
+            v = min(v, at(x + 1, y - 1) + 1.4142f)
+            d[i] = v
+        }
+        for (y in h - 1 downTo 0) for (x in w - 1 downTo 0) {
+            val i = y * w + x
+            if (d[i] == 0f) continue
+            var v = d[i]
+            v = min(v, at(x + 1, y) + 1f)
+            v = min(v, at(x, y + 1) + 1f)
+            v = min(v, at(x + 1, y + 1) + 1.4142f)
+            v = min(v, at(x - 1, y + 1) + 1.4142f)
+            d[i] = v
+        }
+        return d
+    }
+
+    /** 7 tipos x 4 rotaciones de naves completas para una facción (en paralelo). */
+    fun makeShipSprites(colors: IntArray, f: Faction): Array<Bitmap> {
+        val n = 28
+        val out = arrayOfNulls<Bitmap>(n)
+        val next = java.util.concurrent.atomic.AtomicInteger(0)
+        val nt = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+        val ths = Array(nt) {
+            Thread {
+                while (true) {
+                    val i = next.getAndIncrement()
+                    if (i >= n) break
+                    out[i] = makeShipSprite(i / 4, i % 4, f.accent(colors[i / 4]), f)
+                }
+            }.also { th -> th.start() }
+        }
+        for (th in ths) th.join()
+        return Array(n) { out[it]!! }
+    }
+
+    /**
+     * Nave completa (no placas por celda): silueta de la unión de sus celdas con esquinas exteriores redondeadas,
+     * casco continuo con paneles a lo largo del eje, una cabina al frente, dos toberas atrás, franjas de facción,
+     * ventanas, luces de navegación en las alas y relieve iluminado (difuso, especular, reflejo, oclusión).
+     */
+    fun makeShipSprite(type: Int, rot: Int, accent: Int, f: Faction): Bitmap {
+        val cells = Shapes.cells(type, rot)
+        var mnx = 9; var mny = 9; var mxx = -9; var mxy = -9
+        for (c in cells) { mnx = min(mnx, c[0]); mny = min(mny, c[1]); mxx = max(mxx, c[0]); mxy = max(mxy, c[1]) }
+        val cw = mxx - mnx + 1
+        val ch = mxy - mny + 1
+        val cp = 96
+        val w = cw * cp
+        val h = ch * cp
+        val sc = 64f / cp
+        val occ = BooleanArray(w * h)
+        val cellOcc = Array(ch) { BooleanArray(cw) }
+        for (c in cells) cellOcc[c[1] - mny][c[0] - mnx] = true
+        for (y in 0 until h) for (x in 0 until w) occ[y * w + x] = cellOcc[y / cp][x / cp]
+        val rr = 20f
+        val d1 = distField(occ, w, h, false)
+        val eroded = BooleanArray(w * h) { d1[it] > rr }
+        val d2 = distField(BooleanArray(w * h) { !eroded[it] }, w, h, true)
+        val lim = rr - 3f
+        val sil = BooleanArray(w * h) { d2[it] <= lim }
+        val d3 = distField(sil, w, h, false)
+
+        // ejes de la nave: columna principal (la fila/columna con más celdas)
+        val horiz = cw >= ch
+        var spineIdx = 0; var best = -1
+        if (horiz) {
+            for (r in 0 until ch) { val k = cellOcc[r].count { it }; if (k > best) { best = k; spineIdx = r } }
+        } else {
+            for (q in 0 until cw) { var k = 0; for (r in 0 until ch) if (cellOcc[r][q]) k++; if (k > best) { best = k; spineIdx = q } }
+        }
+        var sMin = 99; var sMax = -1
+        if (horiz) { for (q in 0 until cw) if (cellOcc[spineIdx][q]) { sMin = min(sMin, q); sMax = max(sMax, q) } }
+        else { for (r in 0 until ch) if (cellOcc[r][spineIdx]) { sMin = min(sMin, r); sMax = max(sMax, r) } }
+        val spine = (spineIdx + 0.5f) * 64f
+        val aStart = sMin * 64f
+        val aEnd = (sMax + 1) * 64f
+        val cockA = aStart + 26f
+        val engA = aEnd - 9f
+        // luces de navegación en las celdas de ala (fuera de la columna)
+        val navs = ArrayList<FloatArray>()
+        for (r in 0 until ch) for (q in 0 until cw) {
+            if (!cellOcc[r][q]) continue
+            val onSpine = if (horiz) r == spineIdx else q == spineIdx
+            if (onSpine) continue
+            val ca = ((if (horiz) q else r) + 0.5f) * 64f
+            val cb = ((if (horiz) r else q) + 0.5f) * 64f
+            val dirB = if (cb > spine) 1f else -1f
+            navs.add(floatArrayOf(ca, cb + dirB * 20f, if (dirB > 0) 1f else 0f))
+        }
+
+        val acR = Color.red(accent).toFloat(); val acG = Color.green(accent).toFloat(); val acB = Color.blue(accent).toFloat()
+        val huR = Color.red(f.hull).toFloat(); val huG = Color.green(f.hull).toFloat(); val huB = Color.blue(f.hull).toFloat()
+        val lnR = Color.red(f.lens).toFloat(); val lnG = Color.green(f.lens).toFloat(); val lnB = Color.blue(f.lens).toFloat()
+        val wnR = Color.red(f.window).toFloat(); val wnG = Color.green(f.window).toFloat(); val wnB = Color.blue(f.window).toFloat()
+        val fbR = Color.red(f.flameA).toFloat(); val fbG = Color.green(f.flameA).toFloat(); val fbB = Color.blue(f.flameA).toFloat()
+        val sd = type * 17f + 3f
+
+        // campo de alturas
+        val hgt = FloatArray(w * h)
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = y * w + x
+            if (!sil[i]) continue
+            val lx = (x + 0.5f) * sc
+            val ly = (y + 0.5f) * sc
+            val along = if (horiz) lx else ly
+            val across = if (horiz) ly else lx
+            val dIn = d3[i] * sc
+            var hh = 0.55f * smooth(0f, 4.5f, dIn) + 0.45f * smooth(0f, 14f, dIn)
+            if (dIn > 6f) {
+                val pa = ((along - 20f) % 40f + 40f) % 40f
+                hh -= 0.2f * (1f - smooth(0.4f, 1.8f, min(pa, 40f - pa)))
+                if (along > aStart + 4f && along < aEnd - 4f) {
+                    hh -= 0.17f * (1f - smooth(0.4f, 1.6f, abs(abs(across - spine) - 17f)))
+                }
+            }
+            val ca = (along - cockA) / 16f
+            val cb = (across - spine) / 9.5f
+            val cr2 = ca * ca + cb * cb
+            if (cr2 < 1f) hh += 0.95f * sqrt(1f - cr2)
+            else if (cr2 < 1.35f) hh -= 0.2f
+            for (sgn in intArrayOf(-1, 1)) {
+                val dn = sqrt((along - engA) * (along - engA) + (across - spine - sgn * 10f) * (across - spine - sgn * 10f))
+                if (dn < 6.5f) hh -= 0.4f * (1f - dn / 6.5f)
+            }
+            hgt[i] = hh
+        }
+
+        val ll = sqrt(0.5f * 0.5f + 0.6f * 0.6f + 0.62f * 0.62f)
+        val lx0 = -0.5f / ll; val ly0 = -0.6f / ll; val lz0 = 0.62f / ll
+        val hl = sqrt(lx0 * lx0 + ly0 * ly0 + (lz0 + 1f) * (lz0 + 1f))
+        val hx = lx0 / hl; val hy = ly0 / hl; val hz = (lz0 + 1f) / hl
+        val px = IntArray(w * h)
+        fun hAt(x: Int, y: Int): Float {
+            val xx = x.coerceIn(0, w - 1); val yy = y.coerceIn(0, h - 1)
+            return hgt[yy * w + xx]
+        }
+        for (y in 0 until h) for (x in 0 until w) {
+            val i = y * w + x
+            val alpha = ((lim - d2[i]) + 1f).coerceIn(0f, 1f)
+            if (alpha <= 0f) continue
+            val lx = (x + 0.5f) * sc
+            val ly = (y + 0.5f) * sc
+            val along = if (horiz) lx else ly
+            val across = if (horiz) ly else lx
+            val dIn = d3[i] * sc
+            var nx = -(hAt(x + 1, y) - hAt(x - 1, y)) / (2f * sc) * 5f
+            var ny = -(hAt(x, y + 1) - hAt(x, y - 1)) / (2f * sc) * 5f
+            val nl = sqrt(nx * nx + ny * ny + 1f)
+            nx /= nl; ny /= nl
+            val nz = 1f / nl
+
+            val n0 = Noise.fbm(along * 0.05f, across * 0.3f, sd, 3)
+            val grain = Noise.fbm(lx * 0.7f, ly * 0.7f, sd + 9f, 2)
+            var lum = (0.8f + 0.4f * n0) * (0.9f + 0.2f * grain)
+            lum *= 0.84f + 0.32f * Noise.fbm(along * 0.9f, across * 0.05f, sd + 4f, 3)
+            val panel = (((along - 20f) / 40f).toInt() + 40) * 3 + (if (across > spine) 1 else 0)
+            lum *= 0.9f + 0.2f * Noise.n3(panel.toFloat(), sd, 2.2f)
+            var r = huR * lum; var g = huG * lum; var b = huB * lum
+            when (f.special) {
+                1 -> {
+                    val cell = 2.2f
+                    val uu = (lx % cell) / cell
+                    val par = ((lx / cell).toInt() + (ly / cell).toInt()) % 2 == 0
+                    val wv = 0.7f + 0.3f * (if (par) uu else 1f - uu)
+                    r *= wv; g *= wv; b *= wv
+                }
+                2 -> {
+                    val cn = Noise.fbm(lx * 0.12f + sd, ly * 0.12f, 3.3f, 3)
+                    if (cn > 0.56f) { r *= 0.62f; g *= 0.78f; b *= 0.55f }
+                    else if (cn < 0.42f) { r *= 1.35f; g *= 1.2f; b *= 0.9f }
+                }
+                3 -> {
+                    val ia = (nx + ny) * 5f + lx * 0.04f
+                    r *= 0.75f + 0.45f * kotlin.math.sin(ia)
+                    g *= 0.75f + 0.45f * kotlin.math.sin(ia + 2.1f)
+                    b *= 0.75f + 0.45f * kotlin.math.sin(ia + 4.2f)
+                }
+            }
+            var er = 0f; var eg = 0f; var eb = 0f
+            // franjas de facción a lo largo de la columna y en las alas
+            val dsp = abs(across - spine)
+            if (along > aStart + 8f && along < aEnd - 14f && dsp > 7.5f && dsp < 10.5f && dIn > 3f) {
+                r = acR * 0.8f; g = acG * 0.8f; b = acB * 0.8f
+                er += acR * 0.2f; eg += acG * 0.2f; eb += acB * 0.2f
+            }
+            for (nv in navs) {
+                if (abs(across - nv[1]) < 2.2f && abs(along - nv[0]) < 18f && dIn > 3f) {
+                    r = acR * 0.75f; g = acG * 0.75f; b = acB * 0.75f
+                }
+            }
+            // ventanas a los lados de la columna
+            if (along > cockA + 22f && along < engA - 14f && dIn > 4f) {
+                val wa = ((along - cockA) % 12f)
+                if (wa < 3.2f && abs(dsp - 13f) < 1.6f) {
+                    val litw = Noise.n3((along / 12f).toInt().toFloat(), across, sd) > 0.35f
+                    if (litw) { r = wnR * 0.4f; g = wnG * 0.4f; b = wnB * 0.4f; er += wnR; eg += wnG; eb += wnB }
+                    else { r *= 0.3f; g *= 0.3f; b *= 0.35f }
+                }
+            }
+            // cabina
+            val ca = (along - cockA) / 16f
+            val cb = (across - spine) / 9.5f
+            val cr2 = ca * ca + cb * cb
+            if (cr2 < 1f) {
+                val kk = 1f - sqrt(cr2)
+                r = lnR * 0.25f; g = lnG * 0.25f; b = lnB * 0.25f
+                er += lnR * (0.25f + 0.7f * kk); eg += lnG * (0.25f + 0.7f * kk); eb += lnB * (0.25f + 0.7f * kk)
+            } else if (cr2 < 1.35f) { r *= 0.35f; g *= 0.35f; b *= 0.4f }
+            // toberas con brillo del motor
+            for (sgn in intArrayOf(-1, 1)) {
+                val dn = sqrt((along - engA) * (along - engA) + (across - spine - sgn * 10f) * (across - spine - sgn * 10f))
+                if (dn < 6.5f) {
+                    val k2 = (1f - dn / 6.5f)
+                    r = 20f; g = 18f; b = 22f
+                    er += fbR * k2 * 1.2f; eg += fbG * k2 * 1.2f; eb += fbB * k2 * 1.2f
+                }
+            }
+            // luces de navegación (rojo / verde)
+            for (nv in navs) {
+                val dn = sqrt((along - nv[0]) * (along - nv[0]) + (across - nv[1]) * (across - nv[1]))
+                if (dn < 7f) {
+                    val k3 = (1f - dn / 7f).pow(2f)
+                    if (nv[2] > 0.5f) { er += 60f * k3; eg += 255f * k3; eb += 120f * k3 } else { er += 255f * k3; eg += 50f * k3; eb += 40f * k3 }
+                }
+            }
+            val ndl = max(0f, nx * lx0 + ny * ly0 + nz * lz0)
+            val ndh = max(0f, nx * hx + ny * hy + nz * hz)
+            val spec = ndh.pow(18f + 70f * f.gloss) * (0.12f + 0.9f * f.gloss)
+            val ao = 0.7f + 0.3f * smooth(0f, 0.55f, hgt[i])
+            val env = f.metal * (0.5f - 0.5f * ny)
+            val shade = (0.26f + 0.9f * ndl) * ao
+            var sp = 0f
+            if (f.sparkle > 0f && Noise.fbm(lx * 2.5f + 20f, ly * 2.5f, sd + 11f, 2) > 0.78f) sp = f.sparkle
+            val tr = huR / 255f; val tg = huG / 255f; val tb = huB / 255f
+            r = r * shade + 255f * spec * (0.55f + 0.45f * f.metal * tr) + 70f * env * (tr + 0.3f) + 255f * sp * ndl + er
+            g = g * shade + 255f * spec * (0.55f + 0.45f * f.metal * tg) + 70f * env * (tg + 0.3f) + 255f * sp * ndl + eg
+            b = b * shade + 255f * spec * (0.55f + 0.45f * f.metal * tb) + 70f * env * (tb + 0.3f) + 255f * sp * ndl + eb
+            if (dIn < 1.0f) { r *= 0.4f; g *= 0.4f; b *= 0.45f }
+            px[i] = Color.argb(cl(255f * alpha), cl(r), cl(g), cl(b))
+        }
+        val bmp = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+        bmp.setHasMipMap(true)
+        return bmp
+    }
+
     /** Roca irregular con relieve e iluminación lateral. */
     fun makeRock(size: Int, seed: Int): Bitmap {
         val px = IntArray(size * size)
@@ -367,6 +625,9 @@ object Textures {
      * Devuelve también posiciones de ciudades (normalizadas al disco, -1..1) para efectos; la primera
      * es la más cercana al centro y sirve de epicentro.
      */
+    private const val RS = 0.93f
+    private val LMAX = sqrt(1f - RS * RS)
+
     fun makePlanet(radius: Int, skin: Skin = Skins.all[0]): PlanetData {
         val d = radius * 2
         val px = IntArray(d * d)
@@ -388,16 +649,40 @@ object Textures {
         val ccR = Color.red(skin.crackColor).toFloat(); val ccG = Color.green(skin.crackColor).toFloat(); val ccB = Color.blue(skin.crackColor).toFloat()
         fun work(ya: Int, yb: Int, out: ArrayList<FloatArray>) {
         for (y in ya until yb) for (x in 0 until d) {
-            val nx = (x + 0.5f - radius) / radius
-            val ny = (y + 0.5f - radius) / radius
+            // el bitmap incluye la capa de atmósfera: la superficie ocupa RS del radio y el aire llega a 1
+            val bx = (x + 0.5f - radius) / radius
+            val by = (y + 0.5f - radius) / radius
+            val rb2 = bx * bx + by * by
+            if (rb2 >= 1f) continue
+            val rb = sqrt(rb2)
+            if (rb >= RS) {
+                // solo aire: espesor atravesado por la línea de visión, más denso cerca de la superficie
+                val path = 2f * sqrt(1f - rb2) / (2f * LMAX)
+                val alt = (rb - RS) / (1f - RS)
+                val dens = path * kotlin.math.exp(-alt * 2.4f)
+                val sunSide = (bx * lx + by * ly) / (rb * sqrt(lx * lx + ly * ly))
+                val dayR = smooth(-0.45f, 0.6f, sunSide)
+                val dusk = smooth(-0.45f, -0.05f, sunSide) * (1f - smooth(-0.05f, 0.45f, sunSide))
+                val k = dens * (0.18f + 0.82f * dayR)
+                val ar = min(1f, 255f * atr * 1.25f * (1f - dusk * 0.5f) + 255f * dusk * 0.6f)
+                val ag = 255f * atg * 1.25f * (1f - dusk * 0.4f) + 140f * dusk * 0.6f
+                val ab = 255f * atb * 1.25f * (1f - dusk * 0.6f) + 70f * dusk * 0.6f
+                px[y * d + x] = Color.argb(cl(255f * min(1f, k * 1.7f)), cl(ar.coerceAtLeast(0f) * 1f + 0f), cl(ag), cl(ab))
+                continue
+            }
+            val nx = bx / RS
+            val ny = by / RS
             val rr = nx * nx + ny * ny
-            if (rr >= 1.03f) continue
-            val edge = if (rr <= 1f) 1f else (1.03f - rr) / 0.03f
+            val edge = 1f
             val nz = sqrt(max(0f, 1f - rr))
             val qx = nx * 0.92f
             val qy = ny * 0.92f + nz * 0.39f
             val qz = nz * 0.92f - ny * 0.39f
-            val sx = qx * skin.freq + 3.1f + skin.seed; val sy = qy * skin.freq + 1.7f + skin.seed * 0.7f; val sz = qz * skin.freq + 5.3f + skin.seed * 1.3f
+            val sx0 = qx * skin.freq + 3.1f + skin.seed; val sy0 = qy * skin.freq + 1.7f + skin.seed * 0.7f; val sz0 = qz * skin.freq + 5.3f + skin.seed * 1.3f
+            // deformación de dominio: costas y continentes más naturales
+            val sx = sx0 + (Noise.fbm(sx0 * 0.7f + 17f, sy0 * 0.7f, sz0 * 0.7f, 3) - 0.5f) * 0.9f
+            val sy = sy0 + (Noise.fbm(sx0 * 0.7f, sy0 * 0.7f + 29f, sz0 * 0.7f, 3) - 0.5f) * 0.9f
+            val sz = sz0 + (Noise.fbm(sx0 * 0.7f, sy0 * 0.7f, sz0 * 0.7f + 41f, 3) - 0.5f) * 0.9f
             val c0 = Noise.fbm(sx, sy, sz, 7)
             val cRid = 1f - abs(2f * c0 - 1f)
             val cMix = c0 * (1f - skin.ridge) + cRid * 0.72f * skin.ridge
@@ -447,19 +732,23 @@ object Textures {
             r += ctr * cities * 0.95f; g += ctg * cities * 0.95f; b += ctb * cities * 0.95f
             if (skin.crackGlow >= 0.5f && cm > 0f) { r += ccR * cm; g += ccG * cm; b += ccB * cm }
             if (cityRaw > 0.70f && land > 0.95f && ice < 0.1f && nz > 0.3f && ((x * 7 + y * 13) % 41 == 0)) {
-                out.add(floatArrayOf(nx, ny))
+                out.add(floatArrayOf(bx, by))
             }
             val wave = if (oceanMask > 0.3f) Noise.fbm(sx * 9f, sy * 9f, sz * 9f, 2) - 0.5f else 0f
             val sp = max(0f, nx * hx + ny * hy + nz * hz + wave * 0.12f).pow(70f) * oceanMask * (1f - cloud) * 0.85f
             r += 255f * sp; g += 255f * sp; b += 240f * sp
             if (ice > 0.5f && Noise.fbm(sx * 14f, sy * 14f, sz * 14f, 2) > 0.8f) { r += 80f * day; g += 85f * day; b += 90f * day }
-            val limb = 0.55f + 0.45f * sqrt(nz)
+            val limb = 0.6f + 0.4f * sqrt(nz)
             r *= limb; g *= limb; b *= limb
-            val fres = (1f - nz).pow(2.6f)
-            val atm = fres * (0.18f + 0.82f * day)
-            r += 255f * atr * atm * 1.4f; g += 255f * atg * atm * 1.4f; b += 255f * atb * atm * 1.4f
+            // dispersión atmosférica: bruma proporcional al aire entre el ojo y la superficie
+            val haze = ((sqrt(1f - rb2) - sqrt(max(0f, RS * RS - rb2))) / LMAX).coerceIn(0f, 1f)
+            val hz = haze * haze * 0.9f + haze * 0.1f
             val sunset = smooth(-0.12f, 0.12f, dot) * (1f - smooth(0.12f, 0.5f, dot))
-            val sn = sunset * (0.15f + fres * 1.2f) * 0.35f
+            val sc = 0.12f + 0.88f * day
+            r = r * (1f - 0.55f * hz) + (255f * atr * (1f - sunset * 0.5f) + 255f * sunset * 0.5f) * hz * sc
+            g = g * (1f - 0.55f * hz) + (255f * atg * (1f - sunset * 0.4f) + 140f * sunset * 0.5f) * hz * sc
+            b = b * (1f - 0.55f * hz) + (255f * atb * (1f - sunset * 0.6f) + 70f * sunset * 0.5f) * hz * sc
+            val sn = sunset * 0.12f
             r += 255f * sn; g += 140f * sn; b += 60f * sn
             px[y * d + x] = Color.argb(cl(255f * edge), cl(r), cl(g), cl(b))
         }

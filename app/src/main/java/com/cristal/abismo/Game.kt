@@ -12,6 +12,15 @@ import kotlin.random.Random
 class Piece(val type: Int, var cells: Array<IntArray>, var px: Int, var py: Int) {
     var fx = px.toFloat()
     var fy = py.toFloat()
+    /** Rotación actual (0..3), para elegir el dibujo de la nave. */
+    var rot = 0
+}
+
+/** Nave ya colocada: se guarda entera para dibujarla completa y para moverla con la gravedad. */
+class Placed(val id: Int, val type: Int, val rot: Int, var px: Int, var py: Int) {
+    val cells: Array<IntArray> = Shapes.cells(type, rot)
+    /** Desfase visual (en celdas) que se anima hasta 0 cuando la nave se recorre. */
+    var vy = 0f
 }
 
 object Shapes {
@@ -24,6 +33,13 @@ object Shapes {
         arrayOf(intArrayOf(-1, 0), intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(1, 1)), // L
         arrayOf(intArrayOf(-1, 0), intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(-1, 1)) // J
     )
+
+    /** Celdas de un tipo con `rot` giros de 90° (el mismo giro que usa Game.rotate). */
+    fun cells(type: Int, rot: Int): Array<IntArray> {
+        var c = Array(4) { all[type][it].copyOf() }
+        repeat(rot and 3) { c = Array(4) { i -> intArrayOf(-c[i][1], c[i][0]) } }
+        return c
+    }
 }
 
 /**
@@ -38,6 +54,10 @@ class Game(val cols: Int, val rows: Int) {
     /** Identificador de nave por celda (0 = vacío), para borrar naves completas. */
     val ids = Array(rows) { IntArray(cols) }
     private var nextId = 1
+    /** Naves colocadas por identificador. */
+    val placed = LinkedHashMap<Int, Placed>()
+    /** Filas completadas recientemente (la vista las usa para el destello de explosión). */
+    val clearedRows = ArrayList<Int>()
 
     var piece: Piece? = null
     var gx = 0
@@ -166,6 +186,7 @@ class Game(val cols: Int, val rows: Int) {
             if (prog(ny) < progMax) continue
             if (!collides(rot, nx, ny)) {
                 p.cells = rot
+                p.rot = (p.rot + 1) and 3
                 place(p, nx, ny)
                 blocked = false
                 return
@@ -191,6 +212,9 @@ class Game(val cols: Int, val rows: Int) {
     }
 
     fun update(dt: Float) {
+        // animación del recorrido de las naves colocadas
+        val st = 9f * dt
+        for (sh in placed.values) if (sh.vy != 0f) sh.vy = if (abs(sh.vy) <= st) 0f else sh.vy - Math.signum(sh.vy) * st
         if (over) { overTime += dt; return }
         val p = piece ?: return
         // lenta al nacer y cada vez más rápida hacia el borde
@@ -231,6 +255,7 @@ class Game(val cols: Int, val rows: Int) {
             ironDrops.add(intArrayOf(x, y, 10))
             if (abs(x - cx) <= 1 && abs(y - cy) <= 1) danger = true
         }
+        placed[id] = Placed(id, p.type, p.rot, p.px, p.py)
         piece = null
         val n = clearLines()
         if (n > 0) {
@@ -246,38 +271,86 @@ class Game(val cols: Int, val rows: Int) {
     private fun rowFull(y: Int) = grid[y].all { it != 0 }
     private fun colFull(x: Int) = (0 until rows).all { grid[it][x] != 0 }
 
-    /** Al completar una línea se destruyen las naves enteras que la tocan (no quedan restos de 1x1). */
+    /**
+     * Al completar una línea se destruyen las naves enteras que la tocan. Después, las naves de la mitad de
+     * arriba se recorren hacia arriba y las de abajo hacia abajo hasta topar; si así se completa otra línea,
+     * se encadena.
+     */
     private fun clearLines(): Int {
-        val fr = (0 until rows).filter { it != cy && rowFull(it) }
-        val fc = (0 until cols).filter { it != cx && colFull(it) }
-        if (fr.isEmpty() && fc.isEmpty()) return 0
-        val kill = HashSet<Int>()
-        for (y in fr) for (x in 0 until cols) kill.add(ids[y][x])
-        for (x in fc) for (y in 0 until rows) kill.add(ids[y][x])
-        for (y in 0 until rows) for (x in 0 until cols) {
-            if (grid[y][x] != 0 && ids[y][x] in kill) {
-                bursts.add(intArrayOf(x, y, grid[y][x]))
-                ironDrops.add(intArrayOf(x, y, 15))
-                grid[y][x] = 0
-                ids[y][x] = 0
+        var total = 0
+        var guard = 0
+        while (guard++ < 5) {
+            val fr = (0 until rows).filter { it != cy && rowFull(it) }
+            val fc = (0 until cols).filter { it != cx && colFull(it) }
+            if (fr.isEmpty() && fc.isEmpty()) break
+            val kill = HashSet<Int>()
+            for (y in fr) for (x in 0 until cols) kill.add(ids[y][x])
+            for (x in fc) for (y in 0 until rows) kill.add(ids[y][x])
+            for (y in 0 until rows) for (x in 0 until cols) {
+                if (grid[y][x] != 0 && ids[y][x] in kill) {
+                    bursts.add(intArrayOf(x, y, grid[y][x]))
+                    ironDrops.add(intArrayOf(x, y, 15))
+                    grid[y][x] = 0
+                    ids[y][x] = 0
+                }
+            }
+            for (k in kill) placed.remove(k)
+            clearedRows.addAll(fr)
+            total += fr.size + fc.size
+            settle()
+        }
+        return total
+    }
+
+    /** Lado de la nave: -1 toda arriba del centro, 1 toda abajo, 0 si toca la fila central. */
+    private fun side(sh: Placed): Int {
+        var up = true; var down = true
+        for (c in sh.cells) {
+            val y = sh.py + c[1]
+            if (y >= cy) up = false
+            if (y <= cy) down = false
+        }
+        return if (up) -1 else if (down) 1 else 0
+    }
+
+    private fun canShift(sh: Placed, dir: Int): Boolean {
+        for (c in sh.cells) {
+            val x = sh.px + c[0]
+            val y = sh.py + c[1] + dir
+            if (y < 0 || y >= rows) return false
+            if (grid[y][x] != 0 && ids[y][x] != sh.id) return false
+        }
+        return true
+    }
+
+    private fun shift(sh: Placed, dir: Int) {
+        val t = grid[sh.py + sh.cells[0][1]][sh.px + sh.cells[0][0]]
+        for (c in sh.cells) { grid[sh.py + c[1]][sh.px + c[0]] = 0; ids[sh.py + c[1]][sh.px + c[0]] = 0 }
+        sh.py += dir
+        for (c in sh.cells) { grid[sh.py + c[1]][sh.px + c[0]] = t; ids[sh.py + c[1]][sh.px + c[0]] = sh.id }
+        sh.vy -= dir
+    }
+
+    /** Gravedad hacia afuera: cada nave avanza hacia el borde de su mitad hasta topar. */
+    private fun settle() {
+        var moved = true
+        var iter = 0
+        while (moved && iter++ < rows) {
+            moved = false
+            val list = placed.values.sortedBy { sh ->
+                val sd = side(sh)
+                var e = 99
+                for (c in sh.cells) {
+                    val y = sh.py + c[1]
+                    e = min(e, if (sd < 0) y else rows - 1 - y)
+                }
+                e
+            }
+            for (sh in list) {
+                val dir = side(sh)
+                if (dir != 0 && canShift(sh, dir)) { shift(sh, dir); moved = true }
             }
         }
-        // lo que estaba entre el centro y la fila completada se recorre hacia afuera
-        if (fr.isNotEmpty()) {
-            val topG = (0 until cy).filter { it !in fr }.map { grid[it] }
-            val topI = (0 until cy).filter { it !in fr }.map { ids[it] }
-            for (i in 0 until cy) {
-                grid[i] = if (i < topG.size) topG[i] else IntArray(cols)
-                ids[i] = if (i < topI.size) topI[i] else IntArray(cols)
-            }
-            val botG = (rows - 1 downTo cy + 1).filter { it !in fr }.map { grid[it] }
-            val botI = (rows - 1 downTo cy + 1).filter { it !in fr }.map { ids[it] }
-            for (j in 0 until rows - 1 - cy) {
-                grid[rows - 1 - j] = if (j < botG.size) botG[j] else IntArray(cols)
-                ids[rows - 1 - j] = if (j < botI.size) botI[j] else IntArray(cols)
-            }
-        }
-        return fr.size + fc.size
     }
 
     /** Distancia (Chebyshev) de la celda ocupada más cercana al centro. */

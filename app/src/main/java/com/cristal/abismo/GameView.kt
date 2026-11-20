@@ -44,6 +44,9 @@ class GameView(ctx: Context) : View(ctx) {
     /** Explosión en una ciudad: t < 0 indica retraso; size escala todo el efecto. */
     private class Blast(val city: Int, var t: Float, val size: Float)
 
+    /** Explosión en pantalla (línea completada). */
+    private class Boom(val x: Float, val y: Float, var t: Float, val size: Float)
+
     private class Meteor(var x: Float, var y: Float, val vx: Float, val vy: Float, var life: Float)
 
     /** Fragmento de hierro que vuela desde una nave hasta la barra. */
@@ -144,6 +147,8 @@ class GameView(ctx: Context) : View(ctx) {
     private val cosmic = ArrayList<Cosmic>()
     private val meteors = ArrayList<Meteor>()
     private val blasts = ArrayList<Blast>()
+    private val booms = ArrayList<Boom>()
+    private val rowFlash = ArrayList<FloatArray>()
     private var blastTimer = 1.5f
     private var soloT = 0f
     private var sprSmoke: Bitmap? = null
@@ -290,6 +295,8 @@ class GameView(ctx: Context) : View(ctx) {
         alert = 0f; flashWhite = 0f
         chips.clear()
         blasts.clear()
+        booms.clear()
+        rowFlash.clear()
         blastTimer = 1.5f
 
         val top = topInset + u * 0.95f
@@ -403,20 +410,7 @@ class GameView(ctx: Context) : View(ctx) {
 
     private fun makeShipThumb(i: Int): Bitmap {
         val f = Factions.all[i]
-        val acc = f.accent(BASE[2])
-        val cs = 96
-        val bmp = Bitmap.createBitmap(cs * 3, cs * 2, Bitmap.Config.ARGB_8888)
-        val cv = Canvas(bmp)
-        val pt = Paint(Paint.FILTER_BITMAP_FLAG)
-        val masks = intArrayOf(2, 14, 8, 1)
-        val pos = arrayOf(intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(2, 0), intArrayOf(1, 1))
-        val rc = RectF()
-        for (k in 0 until 4) {
-            val tile = Textures.makeShip(acc, 2 * 17 + 3, masks[k], f)
-            rc.set((pos[k][0] * cs).toFloat(), (pos[k][1] * cs).toFloat(), ((pos[k][0] + 1) * cs).toFloat(), ((pos[k][1] + 1) * cs).toFloat())
-            cv.drawBitmap(tile, null, rc, pt)
-        }
-        return bmp
+        return Textures.makeShipSprite(2, 0, f.accent(BASE[2]), f)
     }
 
     private fun saveAsync(block: () -> Unit) { Thread { try { block() } catch (e: Exception) { } }.start() }
@@ -445,20 +439,21 @@ class GameView(ctx: Context) : View(ctx) {
             step(3f)
             val fs = shipSel
             val f0 = Factions.all[fs]
-            ships = DiskCache.loadShips(dir, BASE.size * 16, fs)
-                ?: Textures.makeShipTiles(BASE, f0).also { t -> saveAsync { DiskCache.saveShips(dir, t, fs) } }
+            ships = DiskCache.loadSprites(dir, fs, 28)
+                ?: Textures.makeShipSprites(BASE, f0).also { t -> saveAsync { DiskCache.saveSprites(dir, fs, t) } }
             step(3f)
             rocks = Array(5) { Textures.makeRock(96, it * 7 + 1) }
             progress = 1f
             loaded = true
             postInvalidate()
             for (i in skins.indices) {
-                if (thumbs[i] != null) continue
+                if (thumbs[i] != null || skins[i].classified) continue
                 thumbs[i] = DiskCache.loadThumb(dir, i, thumbR)
                     ?: Textures.makePlanet(thumbR, skins[i]).bmp.also { b -> saveAsync { DiskCache.saveThumb(dir, i, thumbR, b) } }
                 postInvalidate()
             }
             for (i in Factions.all.indices) {
+                if (Factions.all[i].classified) continue
                 shipThumbs[i] = DiskCache.loadNamed(dir, "fthumb_$i.png")
                     ?: makeShipThumb(i).also { b -> saveAsync { DiskCache.saveNamed(dir, "fthumb_$i.png", b) } }
                 postInvalidate()
@@ -530,6 +525,10 @@ class GameView(ctx: Context) : View(ctx) {
                 blastTimer = (0.9f + Random.nextFloat() * 1.8f) * (1f - 0.5f * danger)
             }
         }
+        val bo = booms.iterator()
+        while (bo.hasNext()) { val b = bo.next(); b.t += dt; if (b.t > 2.6f) bo.remove() }
+        val rf = rowFlash.iterator()
+        while (rf.hasNext()) { val r = rf.next(); r[1] += dt; if (r[1] > 0.9f) rf.remove() }
         val bi = blasts.iterator()
         while (bi.hasNext()) { val b = bi.next(); b.t += dt; if (b.t > 4.5f) bi.remove() }
 
@@ -578,6 +577,7 @@ class GameView(ctx: Context) : View(ctx) {
             drawLocked(canvas, g)
             drawPiece(canvas, g)
         }
+        drawBooms(canvas)
         drawSparks(canvas)
         canvas.restore()
         if (alert > 0.01f) drawAlert(canvas)
@@ -668,6 +668,7 @@ class GameView(ctx: Context) : View(ctx) {
             val type = (b[2] - 1).coerceIn(0, 6)
             val px = ox + (b[0] + 0.5f) * s
             val py = oy + (b[1] + 0.5f) * s
+            booms.add(Boom(px, py, -Random.nextFloat() * 0.3f, 0.8f + Random.nextFloat() * 0.7f))
             repeat(7) {
                 val a = Random.nextFloat() * 6.283f
                 val v = s * (1.5f + Random.nextFloat() * 4f)
@@ -675,7 +676,12 @@ class GameView(ctx: Context) : View(ctx) {
             }
         }
         g.bursts.clear()
-        shake = 1f
+        shake = 1.8f
+        // explosión dramática: destello en la fila y estruendo
+        for (row in g.clearedRows) rowFlash.add(floatArrayOf(row.toFloat(), 0f))
+        g.clearedRows.clear()
+        sfx.boom()
+        flashWhite = max(flashWhite, 0.35f)
     }
 
     /** Convierte el hierro soltado por las naves en fragmentos que vuelan hacia la barra. */
@@ -877,7 +883,7 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun displayedSkin(): Int =
-        if (phase == 0 && tab == 1 && cache[preview] != null) preview else skinSel
+        if (phase == 0 && tab == 1 && !skins[preview].classified && cache[preview] != null) preview else skinSel
 
     private fun drawPlanet(c: Canvas, g: Game) {
         val si = displayedSkin()
@@ -1120,46 +1126,16 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
+    /** Naves colocadas dibujadas enteras (una imagen por nave), con su desfase de recorrido animado. */
     private fun drawLocked(c: Canvas, g: Game) {
-        val n = g.rows * g.cols
-        if (lkX.size < n) { lkX = IntArray(n); lkY = IntArray(n); lkT = IntArray(n); lkM = IntArray(n) }
-        val xs = lkX; val ys = lkY; val ts = lkT; val ms = lkM
-        var k = 0
-        for (y in 0 until g.rows) for (x in 0 until g.cols) {
-            val v = g.grid[y][x]
-            if (v == 0) continue
-            xs[k] = x; ys[k] = y; ts[k] = v - 1
-            var m = 0
-            val id = g.ids[y][x]
-            if (y > 0 && g.ids[y - 1][x] == id) m = m or 1
-            if (x < g.cols - 1 && g.ids[y][x + 1] == id) m = m or 2
-            if (y < g.rows - 1 && g.ids[y + 1][x] == id) m = m or 4
-            if (x > 0 && g.ids[y][x - 1] == id) m = m or 8
-            ms[k] = m
-            k++
+        val sp = ships ?: return
+        for (layer in 0..2) for (sh in g.placed.values) {
+            drawShipSprite(c, sp, sh.type, sh.rot, sh.cells, sh.px.toFloat(), sh.py + sh.vy, layer, LIFT_LOCKED)
         }
-        drawShips(c, xs, ys, ts, ms, k, 0f, 0f, LIFT_LOCKED, 70)
     }
 
     private fun drawPiece(c: Canvas, g: Game) {
         val p = g.piece ?: return
-        val bx = floor(p.fx).toInt()
-        val by = floor(p.fy).toInt()
-        val offX = p.fx - bx
-        val offY = p.fy - by
-        val xs = IntArray(4) { bx + p.cells[it][0] }
-        val ys = IntArray(4) { by + p.cells[it][1] }
-        val ts = IntArray(4) { p.type }
-        val ms = IntArray(4) { i ->
-            var m = 0
-            for (j in 0 until 4) {
-                if (xs[j] == xs[i] && ys[j] == ys[i] - 1) m = m or 1
-                if (xs[j] == xs[i] + 1 && ys[j] == ys[i]) m = m or 2
-                if (xs[j] == xs[i] && ys[j] == ys[i] + 1) m = m or 4
-                if (xs[j] == xs[i] - 1 && ys[j] == ys[i]) m = m or 8
-            }
-            m
-        }
         var avgx = 0f; var avgy = 0f
         for (cell in p.cells) { avgx += cell[0]; avgy += cell[1] }
         val gl = hypot(g.gx.toFloat(), g.gy.toFloat())
@@ -1177,39 +1153,82 @@ class GameView(ctx: Context) : View(ctx) {
         path.lineTo(ax - ux * a - uy * a, ay - uy * a - ux * a)
         path.close()
         c.drawPath(path, paint)
-        drawShips(c, xs, ys, ts, ms, 4, offX, offY, LIFT_PIECE, 190)
+        val sp = ships ?: return
+        for (layer in 0..2) drawShipSprite(c, sp, p.type, p.rot, p.cells, p.fx, p.fy, layer, LIFT_PIECE)
     }
 
     private fun proj(v: Float, center: Float, lift: Float) =
         v + lift * s * ((v - center) / (4f * s)).coerceIn(-1f, 1f)
 
-    private fun drawShips(
-        c: Canvas, xs: IntArray, ys: IntArray, ts: IntArray, ms: IntArray, n: Int,
-        offX: Float, offY: Float, lift: Float, glowA: Int
-    ) {
-        val tl = ships ?: return
-        val gl = glows ?: return
-        for (layer in 0..2) {
-            val f = when (layer) { 0 -> -lift; 1 -> -lift * 0.5f; else -> 0f }
-            val pt = when (layer) { 0 -> dark1; 1 -> dark2; else -> bmpPaint }
-            for (i in 0 until n) {
-                val x0 = ox + (xs[i] + offX) * s
-                val y0 = oy + (ys[i] + offY) * s
-                rect.set(proj(x0, ccx, f), proj(y0, ccy, f), proj(x0 + s, ccx, f), proj(y0 + s, ccy, f))
-                c.drawBitmap(tl[ts[i] * 16 + ms[i]], null, rect, pt)
-            }
+    /** Una nave completa: capas 0 y 1 son el casco inferior oscuro (relieve hacia el centro), capa 2 la cubierta. */
+    private fun drawShipSprite(c: Canvas, sp: Array<Bitmap>, type: Int, rot: Int, cells: Array<IntArray>, fx: Float, fy: Float, layer: Int, lift: Float) {
+        var mnx = 9; var mny = 9; var mxx = -9; var mxy = -9
+        for (cl in cells) { mnx = min(mnx, cl[0]); mny = min(mny, cl[1]); mxx = max(mxx, cl[0]); mxy = max(mxy, cl[1]) }
+        val x0 = ox + (fx + mnx) * s
+        val y0 = oy + (fy + mny) * s
+        val x1 = x0 + (mxx - mnx + 1) * s
+        val y1 = y0 + (mxy - mny + 1) * s
+        val f = when (layer) { 0 -> -lift; 1 -> -lift * 0.5f; else -> 0f }
+        val pt = when (layer) { 0 -> dark1; 1 -> dark2; else -> bmpPaint }
+        rect.set(proj(x0, ccx, f), proj(y0, ccy, f), proj(x1, ccx, f), proj(y1, ccy, f))
+        c.drawBitmap(sp[type * 4 + (rot and 3)], null, rect, pt)
+    }
+
+    /** Destello que barre la fila completada, ondas de choque, bolas de fuego en capas y humo. */
+    private fun drawBooms(c: Canvas) {
+        val gf = sprFire ?: return
+        val gw = sprWhite ?: return
+        val rd = sprRed ?: return
+        val sm = sprSmoke ?: return
+        for (r in rowFlash) {
+            val t = r[1]
+            val yc = oy + (r[0] + 0.5f) * s
+            val q = (t / 0.9f).coerceIn(0f, 1f)
+            rect.set(-s * 2f, yc - s * (0.8f + 1.5f * q), width + s * 2f, yc + s * (0.8f + 1.5f * q))
+            addPaint.alpha = (255 * (1f - q) * (1f - q)).toInt()
+            c.drawBitmap(gw, null, rect, addPaint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = s * 0.12f * (1f - q) + 1f
+            paint.color = Color.argb((220 * (1f - q)).toInt(), 255, 220, 170)
+            val dy = s * 7f * q
+            c.drawLine(0f, yc - dy, width.toFloat(), yc - dy, paint)
+            c.drawLine(0f, yc + dy, width.toFloat(), yc + dy, paint)
+            paint.style = Paint.Style.FILL
         }
-        for (i in 0 until n) {
-            val x0 = ox + (xs[i] + offX) * s
-            val y0 = oy + (ys[i] + offY) * s
-            val tx0 = x0; val tx1 = x0 + s
-            val ty0 = y0; val ty1 = y0 + s
-            val pulse = 0.75f + 0.25f * sin(time * 3f + xs[i] * 1.3f + ys[i] * 0.7f)
-            val gcx = (tx0 + tx1) / 2f; val gcy = (ty0 + ty1) / 2f
-            val gr = s * 1.3f
-            rect.set(gcx - gr, gcy - gr, gcx + gr, gcy + gr)
-            addPaint.alpha = (glowA * 0.35f * pulse).toInt()
-            c.drawBitmap(gl[ts[i]], null, rect, addPaint)
+        for (b in booms) {
+            if (b.t < 0f) continue
+            val t = b.t
+            val base = s * 1.5f * b.size
+            if (t > 0.2f) {
+                val st = ((t - 0.2f) / 2.4f).coerceIn(0f, 1f)
+                val r = base * (0.6f + 1.4f * st)
+                rect.set(b.x - r, b.y - r - base * st, b.x + r, b.y + r - base * st)
+                objPaint.alpha = (170f * (1f - st) * min(1f, (t - 0.2f) * 4f)).toInt().coerceIn(0, 255)
+                c.drawBitmap(sm, null, rect, objPaint)
+            }
+            if (t < 1.2f) {
+                val q = t / 1.2f
+                val grow = 1f - (1f - q) * (1f - q)
+                var r = base * (0.3f + 1.1f * grow)
+                rect.set(b.x - r * 1.6f, b.y - r * 1.6f, b.x + r * 1.6f, b.y + r * 1.6f)
+                addPaint.alpha = (170 * (1f - q)).toInt().coerceIn(0, 255)
+                c.drawBitmap(rd, null, rect, addPaint)
+                rect.set(b.x - r, b.y - r, b.x + r, b.y + r)
+                addPaint.alpha = (255 * (1f - q)).toInt().coerceIn(0, 255)
+                c.drawBitmap(gf, null, rect, addPaint)
+                r *= 0.45f
+                rect.set(b.x - r, b.y - r, b.x + r, b.y + r)
+                addPaint.alpha = (255 * (1f - q) * (1f - q)).toInt().coerceIn(0, 255)
+                c.drawBitmap(gw, null, rect, addPaint)
+            }
+            if (t < 0.7f) {
+                val q = t / 0.7f
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = s * 0.08f * (1f - q) + 1f
+                paint.color = Color.argb((200 * (1f - q)).toInt(), 255, 210, 150)
+                c.drawCircle(b.x, b.y, base * 1.8f * q, paint)
+                paint.style = Paint.Style.FILL
+            }
         }
     }
 
@@ -1588,6 +1607,7 @@ class GameView(ctx: Context) : View(ctx) {
     private fun shopPreview() = if (subTab == 0) preview else previewShip
     private fun shopName(i: Int) = if (subTab == 0) skins[i].name else factions[i].name
     private fun shopPrice(i: Int) = if (subTab == 0) skins[i].price else factions[i].price
+    private fun shopClassified(i: Int) = if (subTab == 0) skins[i].classified else factions[i].classified
     private fun shopThumb(i: Int): Bitmap? = if (subTab == 0) thumbs[i] else shipThumbs[i]
 
     private fun clampCarousel() {
@@ -1630,14 +1650,23 @@ class GameView(ctx: Context) : View(ctx) {
             paint.textSize = u * 0.4f
             c.drawText(if (i == 0) "Superficies" else "Naves", r.centerX(), r.centerY() + u * 0.14f, paint)
         }
-        if (subTab == 0 && cache[preview] == null) {
+        if (subTab == 0 && skins[preview].classified) {
+            paint.style = Paint.Style.FILL
+            paint.color = Color.BLACK
+            c.drawCircle(ccx, ccy, planetR * planetSc * 1.08f, paint)
+        } else if (subTab == 0 && cache[preview] == null) {
             paint.textSize = u * 0.4f
             paint.color = Color.argb(220, 200, 220, 255)
             c.drawText("Cargando vista previa...", width / 2f, cardsTop - u * 0.5f, paint)
         }
         if (subTab == 1) {
             val tb = shipThumbs[previewShip]
-            if (tb != null) {
+            if (factions[previewShip].classified) {
+                paint.style = Paint.Style.FILL
+                paint.color = Color.BLACK
+                rect.set(ccx - u * 4.4f, ccy - u * 3f, ccx + u * 4.4f, ccy + u * 3f)
+                c.drawRoundRect(rect, u * 0.4f, u * 0.4f, paint)
+            } else if (tb != null) {
                 val pw = u * 8.4f
                 val ph = pw * 2f / 3f
                 rect.set(ccx - pw / 2f, ccy - ph / 2f, ccx + pw / 2f, ccy + ph / 2f)
@@ -1653,6 +1682,21 @@ class GameView(ctx: Context) : View(ctx) {
             val x = cardX(i)
             if (x + cardW < 0f || x > width) continue
             rect.set(x, cardsTop, x + cardW, cardsTop + cardH)
+            if (shopClassified(i)) {
+                // tarjeta totalmente negra: no se ve nada
+                paint.style = Paint.Style.FILL
+                paint.color = Color.BLACK
+                c.drawRoundRect(rect, u * 0.35f, u * 0.35f, paint)
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = if (shopPreview() == i) 3f else 1.5f
+                paint.color = Color.argb(if (shopPreview() == i) 140 else 60, 120, 120, 120)
+                c.drawRoundRect(rect, u * 0.35f, u * 0.35f, paint)
+                paint.style = Paint.Style.FILL
+                paint.color = Color.argb(150, 120, 120, 120)
+                paint.textSize = u * 0.34f
+                c.drawText("Clasificado", x + cardW / 2f, cardsTop + cardW * 0.98f, paint)
+                continue
+            }
             paint.style = Paint.Style.FILL
             paint.color = Color.argb(205, 10, 14, 34)
             c.drawRoundRect(rect, u * 0.35f, u * 0.35f, paint)
@@ -1696,7 +1740,8 @@ class GameView(ctx: Context) : View(ctx) {
         val enough = totalIngots >= shopPrice(pv)
         val text: String
         val col: Int
-        if (own && eq) { text = "Equipada"; col = Color.argb(160, 70, 90, 110) }
+        if (shopClassified(pv)) { text = "Clasificado"; col = Color.rgb(20, 20, 20) }
+        else if (own && eq) { text = "Equipada"; col = Color.argb(160, 70, 90, 110) }
         else if (own) { text = "Equipar"; col = Color.rgb(50, 120, 200) }
         else { text = "Comprar · ${shopPrice(pv)}"; col = if (enough) Color.rgb(40, 150, 90) else Color.rgb(150, 60, 60) }
         paint.style = Paint.Style.FILL
@@ -1716,6 +1761,7 @@ class GameView(ctx: Context) : View(ctx) {
 
     private fun actShop() {
         val i = shopPreview()
+        if (shopClassified(i)) { say("Acceso restringido"); return }
         if (shopOwned(i)) {
             if (shopSel() != i) equipCurrent(i)
         } else {
@@ -1745,8 +1791,8 @@ class GameView(ctx: Context) : View(ctx) {
         val dir = context.cacheDir
         shipBusy = true
         Thread {
-            val tiles = DiskCache.loadShips(dir, BASE.size * 16, i)
-                ?: Textures.makeShipTiles(BASE, f).also { t -> saveAsync { DiskCache.saveShips(dir, t, i) } }
+            val tiles = DiskCache.loadSprites(dir, i, 28)
+                ?: Textures.makeShipSprites(BASE, f).also { t -> saveAsync { DiskCache.saveSprites(dir, i, t) } }
             glows = Array(7) { Textures.makeGlow(f.accent(BASE[it])) }
             flameA = Textures.makeGlow(f.flameA)
             flameB = Textures.makeGlow(f.flameB)
@@ -2057,8 +2103,8 @@ class GameView(ctx: Context) : View(ctx) {
                             for (i in 0 until shopCount()) {
                                 val x = cardX(i)
                                 if (e.x >= x && e.x <= x + cardW) {
-                                    if (subTab == 0) { preview = i; requestSkin(i) }
-                                    else { previewShip = i; sfx.place(factions[i].sfx) }
+                                    if (subTab == 0) { preview = i; if (!skins[i].classified) requestSkin(i) }
+                                    else { previewShip = i; if (!factions[i].classified) sfx.place(factions[i].sfx) }
                                 }
                             }
                         }
