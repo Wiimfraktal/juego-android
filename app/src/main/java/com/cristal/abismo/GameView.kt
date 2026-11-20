@@ -600,6 +600,14 @@ class GameView(ctx: Context) : View(ctx) {
             }
             for (f in futures) try { f.get() } catch (e: Exception) { }
             pool.shutdown()
+            // lo indispensable para jugar se verifica y, si algo falló, se reintenta aquí antes de abrir el menú
+            if (cache[sel] == null) try {
+                cache[sel] = DiskCache.loadPlanet(dir, sel, pr) ?: Textures.makePlanet(pr, skins[sel]).also { DiskCache.savePlanet(dir, sel, pr, it) }
+                fullRes[sel] = true
+            } catch (e: Throwable) { try { cache[sel] = Textures.makePlanet(prv, skins[sel], lite = true) } catch (x: Throwable) { } }
+            if (ships == null) try {
+                ships = Textures.makeShipSprites(BASE, Factions.all[fs], cp).also { t -> DiskCache.saveSprites(dir, fs, t) }
+            } catch (e: Throwable) { try { System.gc(); ships = Textures.makeShipSprites(BASE, Factions.all[fs], 96) } catch (x: Throwable) { } }
             for ((w, job) in later) {
                 try { job() } catch (e: Throwable) { }
                 done += w; progress = min(0.999f, done / total); postInvalidate()

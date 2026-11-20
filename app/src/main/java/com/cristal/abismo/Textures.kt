@@ -172,8 +172,8 @@ object Textures {
                 val la = ((along % 64f) + 64f) % 64f
                 val cellStart = along - la
                 val front = !cellOcc.let { co ->
-                    val ca = ((if (horiz) along else across) / 64f).toInt()
-                    val cb = ((if (horiz) across else along) / 64f).toInt()
+                    val ca = (along / 64f).toInt()
+                    val cb = (across / 64f).toInt()
                     val prevA = ca - 1
                     if (horiz) prevA >= 0 && co[cb][prevA] else prevA >= 0 && co[prevA][cb]
                 }
