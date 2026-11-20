@@ -6,7 +6,7 @@ https://github.com/sgossner/VSCO-2-CE . Las muestras no se incluyen en el reposi
 y se pasa su carpeta como primer argumento. La guitarra eléctrica es un modelo físico de cuerda
 (Karplus-Strong + amplificador de válvulas) definido en make_music.py.
 
-Uso: python3 tools/orquesta.py <carpeta_VSCO> <carpeta_salida> [game|menu|solo|boom|all]
+Uso: python3 tools/orquesta.py <carpeta_VSCO> <carpeta_salida> [game|menu|solo|boom|themes|warm|all]
 """
 import glob
 import importlib.util
@@ -154,6 +154,7 @@ class Lib:
         self.sn = one("VSCO 1 Percussion/drums/snare/drum1/snare1_ff_1.wav")
         self.sn2 = one("VSCO 1 Percussion/drums/snare/drum1/snare1_f_1.wav")
         self.sn_g = one("VSCO 1 Percussion/drums/snare/drum1/snare1_mp_1.wav")
+        self.click = one("VSCO 1 Percussion/drums/snare/drum1/snare1_click.wav")
         self.crash = one("VSCO 1 Percussion/varMetal/Cymbals/clash/crash_hit_fff_loose.wav")
         self.crash2 = one("VSCO 1 Percussion/varMetal/Cymbals/clash/crash_hit_ff_loose.wav")
         self.susp = one("VSCO 1 Percussion/varMetal/Cymbals/susp/susp_hit_softmall_ff.wav")
@@ -445,6 +446,134 @@ def heroic_theme(lib):
     return m.finish(wet=0.32, rt60=2.8, bass=0.25)
 
 
+# ------------------------------------------------------------------ tema "Cálido": emotivo y luminoso (guitarra acústica, piano y cuerdas)
+_GCACHE = {}
+
+
+def _acoustic(n, dur):
+    """Cuerda de guitarra acústica (Karplus-Strong limpio, sin amplificador); 3 variantes por nota."""
+    key = (n, RNG.integers(3))
+    if key not in _GCACHE:
+        _GCACHE[key] = mm.gtr_note(midi(n), 2.2)
+    sig = _GCACHE[key]
+    k = min(len(sig), int(dur * SR))
+    out = sig[:k].copy()
+    f = min(k, int(0.06 * SR))
+    out[k - f:] *= np.linspace(1, 0, f)
+    return out
+
+
+def _body_eq(x):
+    """Resonancia de caja de guitarra acústica y brillo suave (ecualización en frecuencia)."""
+    X = np.fft.rfft(x)
+    f = np.fft.rfftfreq(len(x), 1 / SR)
+    peak = lambda fc, q, db: 1 + (10 ** (db / 20) - 1) * np.exp(-((f - fc) / (fc / q)) ** 2)
+    g = peak(105, 2.5, 6) * peak(210, 3, 3.5) * peak(2800, 1.5, 2.5)
+    g *= 1 / np.sqrt(1 + (f / 7500) ** 4) * (1 - np.exp(-(f / 70) ** 2))
+    return np.fft.irfft(X * g, len(x))
+
+
+def warm_theme(lib):
+    bpm = 94
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    total = 32 * bar
+    m = Mix(total, tail=4.0)
+    G, D, Em, C, Bm, Am, Fs = 43, 38, 40, 36, 35, 45, 42
+    A_ = [(G, MAJ), (D, MAJ), (Em, MIN), (C, MAJ), (G, MAJ), (D, MAJ), (C, MAJ), (D, MAJ)]
+    B_ = [(C, MAJ), (D, MAJ), (Bm, MIN), (Em, MIN), (Am, MIN), (D, MAJ), (G, MAJ), (G, MAJ)]
+    prog = A_ + A_ + B_ + A_
+    voic = {G: [43, 47, 50, 55, 59, 67], D: [50, 57, 62, 66], Em: [40, 47, 52, 55, 59, 64], C: [48, 52, 55, 60, 64],
+            Bm: [47, 54, 59, 62, 66], Am: [45, 52, 57, 60, 64]}
+    gl = np.zeros(len(m.L))
+    gr = np.zeros(len(m.L))
+    # rasgueo folk: abajo, abajo-arriba, arriba-abajo-arriba
+    strum = [(0, 1, 0.9), (1, 1, 0.7), (1.5, -1, 0.5), (2.5, -1, 0.55), (3, 1, 0.75), (3.5, -1, 0.5)]
+    for b, (root, q) in enumerate(prog):
+        t0 = b * bar
+        sec = b // 8
+        notes = voic[root]
+        # guitarra: punteo suave en la primera sección, rasgueo después
+        if sec == 0:
+            order = [0, 2, 3, 4, 1, 3, 4, 3]
+            for k in range(8):
+                n = notes[order[k] % len(notes)]
+                for buf, dl in ((gl, 0.0), (gr, 0.011)):
+                    st = int((t0 + k * beat / 2 + dl) * SR)
+                    sig = _acoustic(n, 1.6) * 0.5
+                    seg = sig[: max(0, len(buf) - st)]
+                    buf[st:st + len(seg)] += seg
+        else:
+            for bt, dr, vel in strum:
+                seq = notes if dr > 0 else notes[::-1][:4]
+                for buf, dl in ((gl, 0.0), (gr, 0.013)):
+                    for i, n in enumerate(seq):
+                        st = int((t0 + bt * beat + dl + i * 0.012 + RNG.uniform(0, 0.004)) * SR)
+                        sig = _acoustic(n, beat * 1.2) * vel * (0.32 if dr > 0 else 0.22)
+                        seg = sig[: max(0, len(buf) - st)]
+                        buf[st:st + len(seg)] += seg
+        # bajo (contrabajo corto) en 1 y 3, con paso hacia el siguiente acorde
+        nxt = prog[(b + 1) % len(prog)][0]
+        bass_r = root - 12 if root > 40 else root
+        nb = nxt - 12 if nxt > 40 else nxt
+        for bt, nn in ((0, bass_r), (2, bass_r + 7 if bass_r + 7 < 50 else bass_r - 5), (3.5, nb + (2 if nb < bass_r else -1))):
+            m.add(t0 + bt * beat, lib.cb_sp.note(nn, beat * 0.9, att=0.004, rel=0.25), 0.42 if bt == 0 else 0.3)
+        # piano: acordes partidos
+        arp = [root + 24, root + 24 + q, root + 31, root + 36]
+        for k in range(8):
+            m.add(t0 + k * beat / 2, lib.piano.note(arp[[0, 2, 3, 1, 2, 3, 2, 1][k]], beat * 0.8, att=0.002, rel=0.8),
+                  0.11 if sec else 0.14, pan=0.25)
+        # cuerdas de fondo desde la segunda sección
+        if sec >= 1:
+            tri = triad(root, q)
+            for i, n in enumerate(tri):
+                m.add(t0, lib.vla.note(n + 24 if n + 24 < 70 else n + 12, bar + 0.3, att=0.45, rel=0.9), 0.13, pan=0.35 - 0.15 * i)
+            m.add(t0, lib.vc.note(root + 12 if root + 12 < 55 else root, bar + 0.3, att=0.4, rel=0.9), 0.22, pan=-0.3)
+        # percusión suave: aro (click) y caja ligera desde la segunda sección
+        if sec >= 1:
+            m.add(t0 + beat, hit(lib.click), 0.22, pan=0.15)
+            m.add(t0 + 3 * beat, hit(lib.sn_g if sec >= 2 else lib.click), 0.2 if sec >= 2 else 0.22, pan=0.15)
+            m.add(t0, hit(lib.bd2), 0.28)
+            m.add(t0 + 2.5 * beat, hit(lib.bd2), 0.18)
+        if b in (8, 16, 24):
+            m.add(t0, hit(lib.susp), 0.2, pan=0.3)
+    m.add(0, _body_eq(gl), 0.30, pan=-0.45)
+    m.add(0, _body_eq(gr), 0.30, pan=0.45)
+    melA = [(71, 0, 1), (74, 1, 1), (71, 2, .5), (69, 2.5, .5), (67, 3, 1),
+            (69, 4, 1.5), (66, 5.5, .5), (69, 6, 1), (74, 7, 1),
+            (67, 8, 1), (71, 9, 1), (76, 10, 1.5), (74, 11.5, .5),
+            (72, 12, 1), (71, 13, 1), (69, 14, 1), (67, 15, 1),
+            (71, 16, 1), (74, 17, 1), (79, 18, 1.5), (78, 19.5, .5),
+            (76, 20, 1), (74, 21, 1), (69, 22, 2),
+            (72, 24, 1), (76, 25, 1), (74, 26, 1), (72, 27, .5), (71, 27.5, .5),
+            (69, 28, 3)]
+    melB = [(76, 0, 1.5), (74, 1.5, .5), (72, 2, 1), (76, 3, 1),
+            (78, 4, 1.5), (76, 5.5, .5), (74, 6, 2),
+            (71, 8, 1), (74, 9, 1), (78, 10, 1.5), (76, 11.5, .5),
+            (79, 12, 2), (76, 13, 1), (71, 15, 1),
+            (72, 16, 1), (76, 17, 1), (81, 18, 1.5), (79, 19.5, .5),
+            (78, 20, 1), (76, 21, 1), (74, 22, 1), (69, 23, 1),
+            (71, 24, 1), (74, 25, 1), (79, 26, 2),
+            (79, 28, 3)]
+    for n, bt, d in melA:  # piano solo, íntimo
+        m.add(bt * beat, lib.piano.note(n + 12, d * beat, att=0.002, rel=1.2), 0.30, pan=0.05)
+    for n, bt, d in melA:  # violines con trompa en contracanto
+        st = 8 * bar + bt * beat
+        m.add(st, lib.vln.note(n + 12, d * beat + 0.15, att=0.08, rel=0.6), 0.26, pan=-0.1)
+        m.add(st, lib.hn.note(n - 12, d * beat + 0.15, att=0.1, rel=0.6), 0.18, pan=0.2)
+    for n, bt, d in melB:  # trompa canta, violines arriba
+        st = 16 * bar + bt * beat
+        m.add(st, lib.hn.note(n - 12, d * beat + 0.15, att=0.08, rel=0.6), 0.34, pan=0.05)
+        m.add(st, lib.vln.note(n + 12, d * beat + 0.15, att=0.12, rel=0.6), 0.17, pan=-0.2)
+    for n, bt, d in melA:  # todo junto, piano doblando
+        st = 24 * bar + bt * beat
+        m.add(st, lib.vln.note(n + 12, d * beat + 0.15, att=0.08, rel=0.6), 0.26, pan=-0.15)
+        m.add(st, lib.hn.note(n, d * beat + 0.15, att=0.08, rel=0.6), 0.2, pan=0.15)
+        m.add(st, lib.piano.note(n + 12, d * beat, att=0.002, rel=1.0), 0.16, pan=0.05)
+    m.add(16 * bar - beat, riser(lib, beat), 0.15)
+    return m.finish(wet=0.34, rt60=2.4, bass=0.22)
+
+
 # ------------------------------------------------------------------ menú (lento y emotivo)
 def menu_theme(lib):
     bpm = 62
@@ -542,6 +671,8 @@ if __name__ == "__main__":
         mm.save(tension_theme(lib), out, "theme_tension")
         mm.save(rock_theme(lib), out, "theme_rock")
         mm.save(heroic_theme(lib), out, "theme_heroic")
+    if what in ("all", "themes", "warm"):
+        mm.save(warm_theme(lib), out, "theme_warm")
     if what in ("all", "menu"):
         mm.save(menu_theme(lib), out, "menu_theme")
     if what in ("all", "solo"):

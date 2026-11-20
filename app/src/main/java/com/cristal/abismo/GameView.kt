@@ -47,7 +47,11 @@ class GameView(ctx: Context) : View(ctx) {
     /** Explosión en pantalla (línea completada). */
     private class Boom(val x: Float, val y: Float, var t: Float, val size: Float)
 
-    private class Meteor(var x: Float, var y: Float, val vx: Float, val vy: Float, var life: Float)
+    private class Meteor(var x: Float, var y: Float, val vx: Float, val vy: Float, var life: Float,
+                         val ev: Boolean = false, val size: Float = 1f, var rot: Float = 0f, val spr: Int = 0)
+    /** Partícula de efecto: 0 humo, 1 gas incandescente, 2 escape de motor, 3 brasa. */
+    private class Puff(var x: Float, var y: Float, val vx: Float, val vy: Float, var life: Float, val max: Float,
+                       val size: Float, val grow: Float, var rot: Float, val spin: Float, val kind: Int, val tex: Int)
 
     /** Fragmento de hierro que vuela desde una nave hasta la barra. */
     private class Chip(
@@ -142,10 +146,18 @@ class GameView(ctx: Context) : View(ctx) {
     }
     private val path = Path()
     private val rect = RectF()
+    private val srcRect = android.graphics.Rect()
     private val sparks = ArrayList<Spark>()
     private val stars = ArrayList<Star>()
     private val cosmic = ArrayList<Cosmic>()
     private val meteors = ArrayList<Meteor>()
+    private val puffs = ArrayList<Puff>()
+    private var frameDt = 0f
+    private val smokePaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { colorFilter = android.graphics.LightingColorFilter(0xFF8C847C.toInt(), 0) }
+    private val hotPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD); colorFilter = android.graphics.LightingColorFilter(0xFFFF9A40.toInt(), 0) }
+    private val bluePaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD); colorFilter = android.graphics.LightingColorFilter(0xFF8FB8FF.toInt(), 0) }
     private val blasts = ArrayList<Blast>()
     private val booms = ArrayList<Boom>()
     private val rowFlash = ArrayList<FloatArray>()
@@ -206,6 +218,10 @@ class GameView(ctx: Context) : View(ctx) {
     private var emBg = try { prefs.getInt("em_b", 10) } catch (e: Exception) { 10 }
     private var emC1 = try { prefs.getInt("em_c1", 5) } catch (e: Exception) { 5 }
     private var emC2 = try { prefs.getInt("em_c2", 1) } catch (e: Exception) { 1 }
+    /** Fila de color cuya cuadrícula de paleta está abierta (2, 3 o 4), o -1. */
+    private var palPick = -1
+    private var palAnim = 0f
+    private val palRect = RectF()
     private var pilot = try { prefs.getString("pilot", "Piloto") ?: "Piloto" } catch (e: Exception) { "Piloto" }
     private var profScroll = 0f
     private var profMax = 0f
@@ -222,9 +238,8 @@ class GameView(ctx: Context) : View(ctx) {
     private var evX = 0f
     private var evY = 0f
     private var gameTime = 0f
-    private var galaxyBmp: Bitmap? = null
+    @Volatile private var galaxyBmp: Bitmap? = null
     private var clusterPts: FloatArray? = null
-    private val auroraPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD); style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
     @Volatile private var shipBusy = false
     private val shipThumbs = arrayOfNulls<Bitmap>(Factions.all.size)
     private var flameA: Bitmap? = null
@@ -366,7 +381,8 @@ class GameView(ctx: Context) : View(ctx) {
         gap = u * 0.3f
         cardsTop = h * 0.735f
         buyRect.set(w / 2f - u * 3.4f, cardsTop + cardH + u * 0.35f, w / 2f + u * 3.4f, cardsTop + cardH + u * 1.45f)
-        for (i in 0 until 5) emRows[i].set(u * 0.6f, cardsTop - u * 0.4f + i * u * 1.05f, w - u * 0.6f, cardsTop - u * 0.4f + i * u * 1.05f + u * 0.9f)
+        val emTop = h * 0.56f
+        for (i in 0 until 5) emRows[i].set(u * 0.45f, emTop + i * u * 1.5f, w - u * 0.45f, emTop + i * u * 1.5f + u * 1.3f)
         clampCarousel()
         medalPops.clear(); voiceQueue.clear(); achToasts.clear()
         evKind = -1; evTimer = 40f + Random.nextFloat() * 40f; gameTime = 0f
@@ -466,76 +482,113 @@ class GameView(ctx: Context) : View(ctx) {
         }
     }
 
-    private fun makeShipThumb(i: Int): Bitmap {
-        val f = Factions.all[i]
-        return Textures.makeShipSprite(2, 0, f.accent(BASE[2]), f)
-    }
-
     private fun saveAsync(block: () -> Unit) { Thread { try { block() } catch (e: Exception) { } }.start() }
 
-    /**
-     * Carga solo lo necesario para jugar (planeta equipado, naves de la facción equipada y rocas) y abre el menú.
-     * Después, en segundo plano, prepara miniaturas de superficies y vistas de facciones (guardadas en disco).
-     * El guardado de PNG nunca bloquea la carga.
-     */
     private val fullRes = BooleanArray(Skins.all.size)
 
+    // texturas de eventos (con ruido; se generan una vez y se guardan en disco)
+    @Volatile private var puffTex: Array<Bitmap>? = null
+    @Volatile private var plasmaTex: Bitmap? = null
+    @Volatile private var auroraTex: Bitmap? = null
+    @Volatile private var swirlTex: Bitmap? = null
+    @Volatile private var shadowTex: Bitmap? = null
+    @Volatile private var ringTex: Bitmap? = null
+    @Volatile private var plateBmp: Bitmap? = null
+
+    /** Resolución del planeta equipado (más píxeles que en pantalla para el acercamiento), con tope de 2048 px. */
+    private fun planetRes() = min((planetR * 2.3f).toInt(), 1024)
+    private fun previewRes() = (planetR * 1.0f).toInt()
+    /** Píxeles por celda de las naves: ~2× el tamaño en pantalla, entre 96 y 128. */
+    private fun spriteCp() = ((s * 1.9f).toInt() / 8 * 8).coerceIn(96, 128)
+
+    private fun cachedTex(dir: java.io.File, name: String, make: () -> Bitmap): Bitmap =
+        DiskCache.loadNamed(dir, name) ?: make().also { b -> saveAsync { DiskCache.saveNamed(dir, name, b) } }
+
     /**
-     * Carga todo en la pantalla inicial: planeta equipado a resolución completa, naves de la facción equipada,
-     * rocas y galaxia, vistas previas de todas las superficies, vistas de todas las facciones y, en disco, las
-     * superficies y facciones compradas (para equiparlas al instante). Lo ya generado se lee del disco.
+     * Carga todo en la pantalla inicial con un grupo de hilos (núcleos − 1): primero el planeta y las naves
+     * equipadas; en paralelo rocas, galaxia, texturas de eventos, vistas previas de todas las superficies y
+     * vistas de todas las facciones; al final deja en disco las superficies y facciones compradas.
+     * Lo ya generado se lee del disco en formato binario (sin decodificar PNG).
      */
     private fun startLoading() {
         if (loading) return
         loading = true
         for (i in skins.indices) skinLoading[i] = true
-        val pr = (planetR * 1.75f).toInt()
-        val prv = (planetR * 0.9f).toInt()
+        val pr = planetRes()
+        val prv = previewRes()
+        val cp = spriteCp()
         val thumbR = (u * 1.3f).toInt()
+        val plW = (u * 10f).toInt(); val plH = (u * 1.5f).toInt()
         val dir = context.cacheDir
         Thread {
+            DiskCache.purgeOld(dir)
             val ownedSkins = skins.indices.filter { it != skinSel && (owned shr it) and 1 == 1 && !skins[it].classified }
             val ownedFac = Factions.all.indices.filter { it != shipSel && (shipOwned shr it) and 1 == 1 && !Factions.all[it].classified }
             val previews = skins.indices.filter { it != skinSel && !skins[it].classified }
             val facs = Factions.all.indices.filter { !Factions.all[it].classified }
-            val total = 3f + 3f + 1f + previews.size * 0.6f + facs.size * 0.15f + ownedSkins.size * 1f + ownedFac.size * 1f
-            var done = 0f
-            fun step(w: Float) { done += w; progress = min(0.999f, done / total) }
+            val tasks = ArrayList<Pair<Float, () -> Unit>>()
             val sel = skinSel
-            val pd = DiskCache.loadPlanet(dir, sel, pr)
-                ?: Textures.makePlanet(pr, skins[sel]).also { saveAsync { DiskCache.savePlanet(dir, sel, pr, it) } }
-            cache[sel] = pd
-            fullRes[sel] = true
-            thumbs[sel] = Bitmap.createScaledBitmap(pd.bmp, thumbR * 2, thumbR * 2, true)
-            step(3f)
             val fs = shipSel
-            ships = DiskCache.loadSprites(dir, fs, 28)
-                ?: Textures.makeShipSprites(BASE, Factions.all[fs]).also { t -> saveAsync { DiskCache.saveSprites(dir, fs, t) } }
-            step(3f)
-            rocks = Array(5) { Textures.makeRock(96, it * 7 + 1) }
-            if (galaxyBmp == null) galaxyBmp = Textures.makeGalaxy(256)
-            step(1f)
-            for (i in previews) {
+            tasks.add(3f to {
+                val raw = DiskCache.planetIsRaw(dir, sel, pr)
+                val pd = DiskCache.loadPlanet(dir, sel, pr)
+                    ?: Textures.makePlanet(pr, skins[sel]).also { saveAsync { DiskCache.savePlanet(dir, sel, pr, it) } }
+                if (!raw && cache[sel] == null) saveAsync { DiskCache.savePlanet(dir, sel, pr, pd) }
+                cache[sel] = pd
+                fullRes[sel] = true
+                thumbs[sel] = Bitmap.createScaledBitmap(pd.bmp, thumbR * 2, thumbR * 2, true)
+            })
+            tasks.add(3f to {
+                ships = DiskCache.loadSprites(dir, fs, 28)
+                    ?: Textures.makeShipSprites(BASE, Factions.all[fs], cp).also { t -> saveAsync { DiskCache.saveSprites(dir, fs, t) } }
+            })
+            tasks.add(1f to {
+                rocks = Array(5) { k -> cachedTex(dir, "rock_$k") { Textures.makeRock(96, k * 7 + 1) } }
+                if (galaxyBmp == null) galaxyBmp = cachedTex(dir, "galaxy") { Textures.makeGalaxy(256) }
+            })
+            tasks.add(1f to {
+                puffTex = Array(3) { k -> cachedTex(dir, "ev_puff_$k") { Textures.makePuff(128, 3.1f + k * 7.7f) } }
+                shadowTex = cachedTex(dir, "ev_shadow") { Textures.makeShadow(256) }
+                ringTex = cachedTex(dir, "ev_ring") { Textures.makeRing(512) }
+            })
+            tasks.add(1f to {
+                plasmaTex = cachedTex(dir, "ev_plasma") { Textures.makePlasma(384, Color.rgb(255, 235, 190), Color.rgb(255, 90, 20), 4.4f) }
+                swirlTex = cachedTex(dir, "ev_swirl") { Textures.makeSwirl(384) }
+            })
+            tasks.add(1f to {
+                auroraTex = cachedTex(dir, "ev_aurora") { Textures.makeAurora(512, 160) }
+                plateBmp = cachedTex(dir, "ev_plate_${plW}x$plH") { Textures.makePlate(plW, plH) }
+            })
+            for (i in previews) tasks.add(0.6f to {
                 val p = DiskCache.loadPlanet(dir, i, prv)
                     ?: Textures.makePlanet(prv, skins[i], lite = true).also { saveAsync { DiskCache.savePlanet(dir, i, prv, it) } }
-                cache[i] = p
+                if (cache[i] == null) cache[i] = p
                 thumbs[i] = Bitmap.createScaledBitmap(p.bmp, thumbR * 2, thumbR * 2, true)
-                step(0.6f)
+            })
+            for (i in facs) tasks.add(0.15f to {
+                shipThumbs[i] = cachedTex(dir, "fthumb_$i") { Textures.makeShipSprite(2, 0, Factions.all[i].accent(BASE[2]), Factions.all[i], cp) }
+            })
+            // superficies y facciones compradas: se dejan listas en disco (PNG) para equiparlas sin esperas
+            for (i in ownedSkins) tasks.add(1f to {
+                if (!DiskCache.hasPlanet(dir, i, pr)) DiskCache.savePlanet(dir, i, pr, Textures.makePlanet(pr, skins[i]), raw = false)
+            })
+            for (i in ownedFac) tasks.add(1f to {
+                if (!DiskCache.hasSprites(dir, i)) DiskCache.saveSprites(dir, i, Textures.makeShipSprites(BASE, Factions.all[i], cp))
+            })
+            val total = tasks.sumOf { it.first.toDouble() }.toFloat()
+            var done = 0f
+            val lock = Any()
+            val nt = (Runtime.getRuntime().availableProcessors() - 1).coerceIn(2, 6)
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(nt)
+            val futures = tasks.map { (w, job) ->
+                pool.submit {
+                    try { job() } catch (e: Throwable) { }
+                    synchronized(lock) { done += w; progress = min(0.999f, done / total) }
+                    postInvalidate()
+                }
             }
-            for (i in facs) {
-                shipThumbs[i] = DiskCache.loadNamed(dir, "fthumb_$i.png")
-                    ?: makeShipThumb(i).also { b -> saveAsync { DiskCache.saveNamed(dir, "fthumb_$i.png", b) } }
-                step(0.15f)
-            }
-            // superficies y facciones compradas: se dejan listas en disco para equiparlas sin esperas
-            for (i in ownedSkins) {
-                if (!DiskCache.hasPlanet(dir, i, pr)) DiskCache.savePlanet(dir, i, pr, Textures.makePlanet(pr, skins[i]))
-                step(1f)
-            }
-            for (i in ownedFac) {
-                if (!DiskCache.hasSprites(dir, i, 28)) DiskCache.saveSprites(dir, i, Textures.makeShipSprites(BASE, Factions.all[i]))
-                step(1f)
-            }
+            for (f in futures) try { f.get() } catch (e: Exception) { }
+            pool.shutdown()
             progress = 1f
             loaded = true
             postInvalidate()
@@ -546,11 +599,15 @@ class GameView(ctx: Context) : View(ctx) {
     private fun requestSkin(i: Int) {
         if (fullRes[i] || skins[i].classified) return
         fullRes[i] = true
-        val pr = (planetR * 1.75f).toInt()
+        val pr = planetRes()
         val dir = context.cacheDir
         Thread {
-            cache[i] = DiskCache.loadPlanet(dir, i, pr)
+            val raw = DiskCache.planetIsRaw(dir, i, pr)
+            val pd = DiskCache.loadPlanet(dir, i, pr)
                 ?: Textures.makePlanet(pr, skins[i]).also { saveAsync { DiskCache.savePlanet(dir, i, pr, it) } }
+            // la equipada se guarda en binario para que el próximo inicio sea más rápido
+            if (!raw) saveAsync { DiskCache.savePlanet(dir, i, pr, pd) }
+            cache[i] = pd
             postInvalidate()
         }.start()
     }
@@ -580,6 +637,7 @@ class GameView(ctx: Context) : View(ctx) {
         if (wantBg != curBg) applyBg(wantBg)
         music.duck = if (paused) 0.35f else if (soloT > 0f) 0.4f else 1f
         val rdt = min(0.05f, (now - lastMusic) / 1e9f)
+        frameDt = rdt
         soloT = max(0f, soloT - rdt)
         music.update(rdt)
         lastMusic = now
@@ -1008,6 +1066,7 @@ class GameView(ctx: Context) : View(ctx) {
     private fun drawMeteors(c: Canvas) {
         val wh = sprWhite ?: return
         for (m in meteors) {
+            if (m.ev) continue
             val f = (m.life / 0.9f).coerceIn(0f, 1f)
             val sp = hypot(m.vx, m.vy)
             val ux = m.vx / sp; val uy = m.vy / sp
@@ -1400,151 +1459,320 @@ class GameView(ctx: Context) : View(ctx) {
         evX = width * (0.2f + Random.nextFloat() * 0.6f)
         evY = height * (0.15f + Random.nextFloat() * 0.2f)
         evFleet.clear()
-        if (evKind == 2) repeat(6) {
+        puffs.clear()
+        shake = max(shake, 0.7f)
+        if (evKind == 2) repeat(7) {
             val dir = if (it % 2 == 0) 1f else -1f
-            evFleet.add(floatArrayOf(if (dir > 0) -s * 3f - it * s * 2.5f else width + s * 3f + it * s * 2.5f,
-                height * (0.1f + Random.nextFloat() * 0.8f), dir * s * (2.2f + Random.nextFloat()), Random.nextInt(7).toFloat()))
+            val sc = 0.45f + Random.nextFloat() * 0.6f
+            evFleet.add(floatArrayOf(if (dir > 0) -s * 4f - it * s * 3f else width + s * 4f + it * s * 3f,
+                height * (0.1f + Random.nextFloat() * 0.8f), dir * s * (1.6f + 1.6f * sc), Random.nextInt(7).toFloat(), sc))
         }
     }
 
     private fun evEnv(): Float = (evT / 1.2f).coerceIn(0f, 1f) * ((10f - evT) / 1.8f).coerceIn(0f, 1f)
 
-    /** Eventos que ocurren detrás del planeta: flota aliada, aurora y agujero de gusano. */
+    private fun addPuff(x: Float, y: Float, vx: Float, vy: Float, life: Float, size: Float, grow: Float, kind: Int) {
+        if (puffs.size >= 240) return
+        puffs.add(Puff(x, y, vx, vy, life, life, size, grow, Random.nextFloat() * 360f, (Random.nextFloat() - 0.5f) * 90f, kind, Random.nextInt(3)))
+    }
+
+    /** Humo, gas incandescente, escapes y brasas de los eventos (texturas con ruido, nada sólido). */
+    private fun updateDrawPuffs(c: Canvas, dt: Float) {
+        val pt = puffTex ?: return
+        val fire = sprFire
+        val it = puffs.iterator()
+        while (it.hasNext()) {
+            val p = it.next()
+            p.life -= dt
+            if (p.life <= 0f) { it.remove(); continue }
+            p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.spin * dt
+            val k = p.life / p.max
+            val age = 1f - k
+            val r = p.size * (1f + p.grow * age)
+            rect.set(p.x - r, p.y - r, p.x + r, p.y + r)
+            when (p.kind) {
+                0 -> { smokePaint.alpha = (150f * k * k.coerceAtMost(1f) * smoothIn(age, 0.08f)).toInt().coerceIn(0, 255); drawRot(c, pt[p.tex], p, smokePaint) }
+                1 -> { hotPaint.alpha = (230f * k * k).toInt().coerceIn(0, 255); drawRot(c, pt[p.tex], p, hotPaint) }
+                2 -> { bluePaint.alpha = (170f * k * k).toInt().coerceIn(0, 255); drawRot(c, pt[p.tex], p, bluePaint) }
+                else -> if (fire != null) { addPaint.alpha = (255f * k).toInt().coerceIn(0, 255); c.drawBitmap(fire, null, rect, addPaint) }
+            }
+        }
+    }
+
+    private fun smoothIn(t: Float, d: Float) = (t / d).coerceIn(0f, 1f)
+
+    private fun drawRot(c: Canvas, b: Bitmap, p: Puff, pnt: Paint) {
+        c.save(); c.rotate(p.rot, p.x, p.y); c.drawBitmap(b, null, rect, pnt); c.restore()
+    }
+
+    /** Eventos que ocurren detrás del planeta: meteoros, flota aliada, aurora y agujero de gusano. */
     private fun drawEventBack(c: Canvas) {
-        if (evKind < 0) return
+        val dt = if (paused) 0f else frameDt
+        if (evKind < 0) { if (puffs.isNotEmpty()) updateDrawPuffs(c, dt); return }
         val env = evEnv()
         when (evKind) {
-            0 -> if (Random.nextFloat() < 0.25f && meteors.size < 14) {
+            0 -> {
                 val w = width.toFloat()
-                val a = 0.5f + Random.nextFloat() * 0.9f
-                val sp = w * (1.1f + Random.nextFloat() * 0.8f)
-                meteors.add(Meteor(Random.nextFloat() * w, Random.nextFloat() * height * 0.5f, cos(a) * sp, sin(a) * sp, 0.9f))
+                if (dt > 0f && evT < 8.5f && Random.nextFloat() < dt * 2.2f && meteors.count { it.ev } < 5) {
+                    val a = 0.55f + Random.nextFloat() * 0.7f
+                    val sp = w * (0.45f + Random.nextFloat() * 0.35f)
+                    meteors.add(Meteor(Random.nextFloat() * w * 0.8f - w * 0.1f, -s * 2f + Random.nextFloat() * height * 0.25f,
+                        cos(a) * sp, sin(a) * sp, 2.6f, true, 0.6f + Random.nextFloat() * 0.8f, Random.nextFloat() * 360f, Random.nextInt(5)))
+                }
+                // estelas: humo detrás de la cabeza y gas incandescente junto a ella
+                for (m in meteors) if (m.ev && dt > 0f) {
+                    val sp = hypot(m.vx, m.vy)
+                    val ux = m.vx / sp; val uy = m.vy / sp
+                    val sz = s * 0.5f * m.size
+                    for (q in 0 until 2) addPuff(m.x - ux * sz * (0.6f + Random.nextFloat()), m.y - uy * sz * (0.6f + Random.nextFloat()),
+                        -ux * sp * 0.05f + (Random.nextFloat() - 0.5f) * s * 0.4f, -uy * sp * 0.05f + (Random.nextFloat() - 0.5f) * s * 0.4f,
+                        1.4f + Random.nextFloat() * 1.2f, sz * 0.75f, 2.4f, 0)
+                    addPuff(m.x - ux * sz * 0.5f, m.y - uy * sz * 0.5f, -ux * sp * 0.15f, -uy * sp * 0.15f, 0.35f + Random.nextFloat() * 0.2f, sz * 0.9f, 0.8f, 1)
+                    if (Random.nextFloat() < 0.3f) addPuff(m.x, m.y, -ux * sp * 0.3f + (Random.nextFloat() - 0.5f) * s * 3f,
+                        -uy * sp * 0.3f + (Random.nextFloat() - 0.5f) * s * 3f, 0.5f + Random.nextFloat() * 0.5f, s * 0.12f, 0f, 3)
+                }
+                updateDrawPuffs(c, dt)
+                val rk = rocks
+                val fire = sprFire
+                val wh = sprWhite
+                for (m in meteors) {
+                    if (!m.ev) continue
+                    m.rot += dt * 120f
+                    val sz = s * 0.5f * m.size
+                    val sp = hypot(m.vx, m.vy)
+                    val ux = m.vx / sp; val uy = m.vy / sp
+                    if (fire != null) {
+                        val r = sz * 2.2f
+                        rect.set(m.x + ux * sz * 0.3f - r, m.y + uy * sz * 0.3f - r, m.x + ux * sz * 0.3f + r, m.y + uy * sz * 0.3f + r)
+                        addPaint.alpha = 150; c.drawBitmap(fire, null, rect, addPaint)
+                    }
+                    if (rk != null) {
+                        rect.set(m.x - sz, m.y - sz, m.x + sz, m.y + sz)
+                        objPaint.alpha = 255
+                        c.save(); c.rotate(m.rot, m.x, m.y); c.drawBitmap(rk[m.spr % rk.size], null, rect, objPaint); c.restore()
+                    }
+                    if (wh != null) {
+                        val r = sz * 0.8f
+                        rect.set(m.x + ux * sz * 0.55f - r, m.y + uy * sz * 0.55f - r, m.x + ux * sz * 0.55f + r, m.y + uy * sz * 0.55f + r)
+                        addPaint.alpha = 210; c.drawBitmap(wh, null, rect, addPaint)
+                    }
+                }
             }
             2 -> {
                 val sp = ships ?: return
                 val fl = flameA
                 for (f in evFleet) {
-                    f[0] += f[2] * 0.016f
+                    f[0] += f[2] * dt
                     val t = f[3].toInt()
+                    val sc = f[4]
                     val rot = if (f[2] > 0) 0 else 2
                     val cells = Shapes.cells(t, rot)
                     var mnx = 9; var mny = 9; var mxx = -9; var mxy = -9
                     for (cl in cells) { mnx = min(mnx, cl[0]); mny = min(mny, cl[1]); mxx = max(mxx, cl[0]); mxy = max(mxy, cl[1]) }
-                    val cs = s * 0.6f
+                    val cs = s * 0.75f * sc
                     rect.set(f[0], f[1], f[0] + (mxx - mnx + 1) * cs, f[1] + (mxy - mny + 1) * cs)
-                    objPaint.alpha = (200 * env).toInt()
+                    val ex = if (f[2] > 0) rect.left else rect.right
+                    val ey = rect.centerY()
+                    if (dt > 0f) addPuff(ex, ey + (Random.nextFloat() - 0.5f) * cs * 0.4f, -f[2] * 0.25f, (Random.nextFloat() - 0.5f) * s * 0.2f,
+                        0.6f + 0.5f * sc, cs * 0.35f, 1.6f, 2)
+                    // las lejanas se ven más pequeñas y apagadas (neblina de distancia)
+                    objPaint.alpha = ((110 + 140 * sc) * env).toInt().coerceIn(0, 255)
                     c.drawBitmap(sp[t * 4 + rot], null, rect, objPaint)
                     if (fl != null) {
-                        val ex = if (f[2] > 0) rect.left else rect.right
-                        val r = cs * 0.8f
-                        rect.set(ex - r, rect.centerY() - r, ex + r, rect.centerY() + r)
-                        addPaint.alpha = (160 * env).toInt()
+                        val r = cs * 0.7f
+                        rect.set(ex - r, ey - r, ex + r, ey + r)
+                        addPaint.alpha = (170 * env).toInt()
                         c.drawBitmap(fl, null, rect, addPaint)
                     }
                 }
+                objPaint.alpha = 255
+                updateDrawPuffs(c, dt)
             }
             4 -> drawAurora(c, env)
             5 -> {
-                auroraPaint.strokeWidth = u * 0.08f
-                for (k in 0 until 7) {
-                    val rr = u * (0.4f + k * 0.45f) * (0.9f + 0.1f * sin(time * 3f + k))
-                    auroraPaint.color = Color.argb((120 * env * (1f - k / 8f)).toInt(), 140 + k * 10, 90, 255)
-                    c.save(); c.rotate(time * 40f * (if (k % 2 == 0) 1 else -1), evX, evY)
-                    rect.set(evX - rr, evY - rr * 0.55f, evX + rr, evY + rr * 0.55f)
-                    c.drawOval(rect, auroraPaint)
-                    c.restore()
+                val sw = swirlTex
+                if (sw != null) {
+                    for (k in 0 until 2) {
+                        val r = u * (3.4f - k * 1.1f) * (0.96f + 0.04f * sin(time * 2f + k))
+                        rect.set(evX - r, evY - r * 0.62f, evX + r, evY + r * 0.62f)
+                        addPaint.alpha = ((200 - k * 50) * env).toInt()
+                        c.save(); c.rotate(-12f, evX, evY); c.rotate(time * (if (k == 0) 38f else -60f), evX, evY)
+                        c.drawBitmap(sw, null, rect, addPaint); c.restore()
+                    }
                 }
-                val gw = sprWhite
+                val sh = shadowTex
+                if (sh != null) {
+                    val r = u * 0.9f
+                    rect.set(evX - r, evY - r * 0.75f, evX + r, evY + r * 0.75f)
+                    objPaint.alpha = (255 * env).toInt()
+                    c.drawBitmap(sh, null, rect, objPaint)
+                    objPaint.alpha = 255
+                }
+                val gw = sprSteel
                 if (gw != null) {
-                    val r = u * 1.2f
+                    val r = u * (0.5f + 0.15f * sin(time * 9f))
                     rect.set(evX - r, evY - r, evX + r, evY + r)
-                    addPaint.alpha = (200 * env).toInt()
+                    addPaint.alpha = (120 * env).toInt()
                     c.drawBitmap(gw, null, rect, addPaint)
                 }
             }
         }
     }
 
+    /** Aurora: cortinas con vetas de ruido que ondulan (la textura se dibuja en tiras verticales desplazadas). */
     private fun drawAurora(c: Canvas, env: Float) {
+        val tex = auroraTex ?: return
         val w = width.toFloat()
-        for (band in 0 until 3) {
-            path.reset()
-            val base = height * (0.12f + band * 0.09f)
-            var x = -u
-            path.moveTo(x, base)
-            while (x <= w + u) {
-                x += u * 0.6f
-                path.lineTo(x, base + sin(x * 0.006f + time * (0.6f + band * 0.2f) + band) * u * 1.4f)
-            }
-            for (k in 0 until 3) {
-                auroraPaint.strokeWidth = u * (1.6f - k * 0.45f)
-                val col = if (band == 1) intArrayOf(160, 80, 255) else intArrayOf(60, 255, 170)
-                auroraPaint.color = Color.argb((26 * env * (k + 1)).toInt(), col[0], col[1], col[2])
-                c.drawPath(path, auroraPaint)
+        val n = 36
+        val tw = tex.width
+        val slice = tw / n
+        for (band in 0 until 2) {
+            val base = height * (0.08f + band * 0.13f)
+            val bh = height * (0.24f - band * 0.05f)
+            addPaint.alpha = ((if (band == 0) 210 else 150) * env).toInt()
+            for (i in 0 until n) {
+                val x0 = i * w / n
+                val x1 = (i + 1) * w / n + 1f
+                val xm = (x0 + x1) / 2f
+                val off = sin(xm * 0.0045f + time * (0.5f + band * 0.25f) + band * 2f) * u * 1.3f +
+                    sin(xm * 0.011f - time * 0.8f) * u * 0.4f
+                val sx = ((i * slice + (time * (18f + band * 9f)).toInt() + band * 97) % (tw - slice) + (tw - slice)) % (tw - slice)
+                srcRect.set(sx, 0, sx + slice, tex.height)
+                rect.set(x0, base + off, x1, base + off + bh)
+                c.drawBitmap(tex, srcRect, rect, addPaint)
             }
         }
     }
 
-    /** Sombra de eclipse que cruza el planeta. */
+    /** Eclipse: sombra con penumbra amplia que cruza el planeta y anillo de atmósfera retroiluminado. */
     private fun drawEclipse(c: Canvas) {
         val env = evEnv()
         val pr = planetR * planetSc
-        path.reset()
-        path.addCircle(ccx, ccy, pr, Path.Direction.CW)
-        c.save()
-        c.clipPath(path)
-        val sx2 = ccx - pr * 2.2f + pr * 4.4f * (evT / 10f)
-        paint.style = Paint.Style.FILL
-        paint.shader = RadialGradient(sx2, ccy - pr * 0.1f, pr * 1.1f,
-            intArrayOf(Color.argb((235 * env).toInt(), 0, 0, 0), Color.argb((160 * env).toInt(), 0, 0, 0), Color.argb(0, 0, 0, 0)),
-            floatArrayOf(0f, 0.75f, 1f), Shader.TileMode.CLAMP)
-        c.drawRect(ccx - pr, ccy - pr, ccx + pr, ccy + pr, paint)
-        paint.shader = null
-        c.restore()
+        val sx2 = ccx - pr * 2.4f + pr * 4.8f * (evT / 10f)
+        val cover = (1f - abs(sx2 - ccx) / (pr * 1.3f)).coerceIn(0f, 1f)
+        val sh = shadowTex
+        if (sh != null) {
+            path.reset()
+            path.addCircle(ccx, ccy, pr * 1.01f, Path.Direction.CW)
+            c.save()
+            c.clipPath(path)
+            val r = pr * 1.35f
+            rect.set(sx2 - r, ccy - pr * 0.08f - r, sx2 + r, ccy - pr * 0.08f + r)
+            objPaint.alpha = (255 * env).toInt()
+            c.drawBitmap(sh, null, rect, objPaint)
+            objPaint.alpha = 255
+            c.restore()
+        }
+        val rg = ringTex
+        if (rg != null && cover > 0f) {
+            val r = pr / 0.9f
+            rect.set(ccx - r, ccy - r, ccx + r, ccy + r)
+            addPaint.alpha = (200 * env * cover * cover).toInt()
+            c.save(); c.rotate(time * 4f, ccx, ccy); c.drawBitmap(rg, null, rect, addPaint); c.restore()
+        }
     }
 
-    /** Tormenta solar: destellos anaranjados en los bordes y rayos de luz. */
+    /** Tormenta solar: plasma con filamentos que entra desde una esquina, destello de lente, brasas y parpadeo de luz. */
     private fun drawStorm(c: Canvas) {
         val env = evEnv()
-        val fl = (0.5f + 0.5f * sin(time * 13f)) * (0.6f + 0.4f * sin(time * 3.1f))
-        val gf = sprFire ?: return
-        val r = width * 0.9f
-        rect.set(-r * 0.6f, -r * 0.6f, r * 0.6f, r * 0.6f)
-        addPaint.alpha = (110 * env * fl).toInt()
-        c.drawBitmap(gf, null, rect, addPaint)
-        paint.style = Paint.Style.STROKE
-        paint.strokeCap = Paint.Cap.ROUND
-        for (k in 0 until 4) {
-            val ang = 0.3f + k * 0.28f + 0.05f * sin(time * 2f + k)
-            paint.strokeWidth = u * (0.15f + 0.1f * k)
-            paint.color = Color.argb((60 * env * fl).toInt(), 255, 180, 90)
-            c.drawLine(0f, 0f, cos(ang) * width * 1.4f, sin(ang) * width * 1.4f, paint)
+        val dt = if (paused) 0f else frameDt
+        val fl = 0.75f + 0.25f * (Noise.fbm(time * 3f, 1.7f, 0.3f, 3) * 2f - 0.5f).coerceIn(0f, 1.2f)
+        val pl = plasmaTex
+        if (pl != null) {
+            for (k in 0 until 2) {
+                val r = width * (1.25f - k * 0.35f)
+                rect.set(-r, -r, r, r)
+                addPaint.alpha = ((150 - k * 40) * env * fl).toInt().coerceIn(0, 255)
+                c.save(); c.rotate(time * (if (k == 0) 4f else -7f)); c.drawBitmap(pl, null, rect, addPaint); c.restore()
+            }
         }
+        // destello de lente a lo largo de la diagonal
+        val wh = sprWhite
+        val fire = sprFire
+        if (wh != null && fire != null) {
+            val dx = ccx; val dy = ccy
+            val fls = floatArrayOf(0.35f, 0.9f, 0.6f, 0.5f, 1.25f, 1.1f)
+            for (k in 0 until 3) {
+                val t = fls[k * 2]
+                val r = u * fls[k * 2 + 1]
+                rect.set(dx * t - r, dy * t - r, dx * t + r, dy * t + r)
+                addPaint.alpha = (60 * env * fl).toInt()
+                c.drawBitmap(if (k == 1) fire else wh, null, rect, addPaint)
+            }
+        }
+        // brasas arrastradas por el viento solar
+        if (dt > 0f && Random.nextFloat() < dt * 25f * env) {
+            val a = 0.35f + Random.nextFloat() * 0.8f
+            val v = width * (0.25f + Random.nextFloat() * 0.35f)
+            addPuff(Random.nextFloat() * width * 0.3f, Random.nextFloat() * height * 0.2f, cos(a) * v, sin(a) * v, 1.2f + Random.nextFloat(), s * (0.06f + Random.nextFloat() * 0.08f), 0f, 3)
+        }
+        updateDrawPuffs(c, dt)
+        // la luz de la escena parpadea levemente
         paint.style = Paint.Style.FILL
+        paint.color = Color.argb((22 * env * fl).toInt(), 255, 150, 60)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD)
+        c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        paint.xfermode = null
     }
 
+    /** Aviso de alerta: placa metálica oscura con franjas de peligro, interferencia y texto ámbar con sombra. */
     private fun drawEventBanner(c: Canvas) {
-        if (evKind < 0 || evT > 3.6f) return
-        val k = (evT / 0.35f).coerceIn(0f, 1f) * ((3.6f - evT) / 0.4f).coerceIn(0f, 1f)
+        if (evKind < 0 || evT > 3.8f) return
+        val k = (evT / 0.3f).coerceIn(0f, 1f) * ((3.8f - evT) / 0.4f).coerceIn(0f, 1f)
+        val glitch = (time * 6.3f) % 1f < 0.07f || evT < 0.45f && Random.nextFloat() < 0.35f
+        val jx = if (glitch) (Random.nextFloat() - 0.5f) * u * 0.35f else 0f
         val y = barY1 + u * 1.5f
-        val x = width / 2f + (1f - k) * width * 0.6f
-        rect.set(x - u * 5f, y - u * 0.75f, x + u * 5f, y + u * 0.75f)
-        paint.style = Paint.Style.FILL
-        paint.color = Color.argb((200 * k).toInt(), 40, 10, 10)
-        c.drawRoundRect(rect, u * 0.3f, u * 0.3f, paint)
+        val x = width / 2f + jx
+        val hw = u * 5f; val hh = u * 0.75f
+        rect.set(x - hw, y - hh, x + hw, y + hh)
+        val al = (255 * k * (if (glitch) 0.7f else 1f)).toInt()
+        val pb = plateBmp
+        if (pb != null) { objPaint.alpha = al; c.drawBitmap(pb, null, rect, objPaint); objPaint.alpha = 255 }
+        else { paint.style = Paint.Style.FILL; paint.color = Color.argb(al * 230 / 255, 28, 28, 30); c.drawRect(rect, paint) }
+        // franjas de peligro en los extremos
+        val sw = u * 0.85f
         paint.style = Paint.Style.STROKE
-        paint.strokeWidth = 3f
-        paint.color = Color.argb((230 * k).toInt(), 255, 170, 60)
-        c.drawRoundRect(rect, u * 0.3f, u * 0.3f, paint)
+        paint.strokeWidth = u * 0.16f
+        for (side in 0 until 2) {
+            val l = if (side == 0) rect.left + u * 0.18f else rect.right - u * 0.18f - sw
+            c.save()
+            c.clipRect(l, rect.top + u * 0.2f, l + sw, rect.bottom - u * 0.2f)
+            paint.color = Color.argb(al * 190 / 255, 214, 150, 40)
+            var q = l - hh * 2
+            while (q < l + sw + hh) { c.drawLine(q, rect.bottom, q + hh * 2, rect.top, paint); q += u * 0.38f }
+            c.restore()
+        }
+        // líneas de barrido muy tenues
+        paint.strokeWidth = 1f
+        paint.color = Color.argb(al * 28 / 255, 0, 0, 0)
+        var ly = rect.top + 2f
+        while (ly < rect.bottom) { c.drawLine(rect.left + sw, ly, rect.right - sw, ly, paint); ly += 3f }
+        // lámparas de aviso giratorias
+        val fire = sprFire
+        if (fire != null) {
+            val beat = 0.5f + 0.5f * sin(time * 9f)
+            for (side in intArrayOf(-1, 1)) {
+                val lx = x + side * (hw - sw * 0.5f - u * 0.18f)
+                val r = u * (0.5f + 0.35f * beat)
+                rect.set(lx - r, y - hh - r * 0.3f, lx + r, y - hh + r * 0.7f)
+                addPaint.alpha = (110 * k * beat).toInt()
+                c.drawBitmap(fire, null, rect, addPaint)
+            }
+        }
         paint.style = Paint.Style.FILL
         paint.textAlign = Paint.Align.CENTER
         paint.typeface = Typeface.DEFAULT_BOLD
-        paint.textSize = u * 0.32f
-        paint.color = Color.argb((255 * k * (0.6f + 0.4f * sin(time * 10f))).toInt(), 255, 200, 90)
-        c.drawText("⚠ ALERTA", x, y - u * 0.18f, paint)
-        paint.textSize = u * 0.45f
-        paint.color = Color.argb((255 * k).toInt(), 255, 255, 255)
+        paint.setShadowLayer(u * 0.12f, 0f, u * 0.04f, Color.argb(al, 0, 0, 0))
+        paint.textSize = u * 0.3f
+        paint.letterSpacing = 0.3f
+        paint.color = Color.argb((al * (0.75f + 0.25f * sin(time * 9f))).toInt(), 255, 178, 60)
+        c.drawText("ALERTA", x, y - u * 0.18f, paint)
+        paint.letterSpacing = 0.06f
+        paint.textSize = u * 0.44f
+        paint.color = Color.argb(al, 236, 232, 222)
         c.drawText(evNames[evKind], x, y + u * 0.42f, paint)
+        paint.letterSpacing = 0f
+        paint.clearShadowLayer()
     }
 
     /** Insignia de medalla estilo Halo: forma y color según el tipo. */
@@ -1821,6 +2049,7 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun switchTab(n: Int) {
+        palPick = -1
         if (n == tab) return
         prevTab = tab
         tabDir = if (n > tab) 1f else -1f
@@ -1950,6 +2179,7 @@ class GameView(ctx: Context) : View(ctx) {
             drawTabContent(c, tab, a)
         }
         drawGear(c, a)
+        drawPalette(c)
         if (settingsAnim > 0.01f) drawSettings(c)
     }
 
@@ -2085,6 +2315,7 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun switchSub(n: Int) {
+        palPick = -1
         if (n == subTab) return
         subTab = n
         previewBg = bgSel
@@ -2297,51 +2528,137 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun drawEmblemEditor(c: Canvas) {
+        val ey = emRows[0].top - u * 3.3f
         paint.style = Paint.Style.FILL
         paint.color = Color.argb(200, 4, 6, 16)
-        c.drawCircle(ccx, ccy - u * 1.2f, u * 3.6f, paint)
-        Emblem.draw(c, paint, ccx, ccy - u * 1.2f, u * 5.6f, emShape, emSym, Emblem.palette[emBg], Emblem.palette[emC1], Emblem.palette[emC2])
+        c.drawCircle(ccx, ey, u * 3.1f, paint)
+        Emblem.draw(c, paint, ccx, ey, u * 4.9f, emShape, emSym, Emblem.palette[emBg], Emblem.palette[emC1], Emblem.palette[emC2])
         val labels = arrayOf("Forma", "Símbolo", "Fondo", "Color forma", "Color símbolo")
         val values = arrayOf(Emblem.shapeNames[emShape], Emblem.symbolNames[emSym], "", "", "")
         val cols = intArrayOf(0, 0, emBg, emC1, emC2)
         for (i in 0 until 5) {
             val r = emRows[i]
             paint.style = Paint.Style.FILL
-            paint.color = Color.argb(200, 10, 14, 34)
-            c.drawRoundRect(r, u * 0.3f, u * 0.3f, paint)
+            paint.color = Color.argb(205, 10, 14, 34)
+            c.drawRoundRect(r, u * 0.35f, u * 0.35f, paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 2f
+            paint.color = Color.argb(70, 170, 200, 255)
+            c.drawRoundRect(r, u * 0.35f, u * 0.35f, paint)
+            paint.style = Paint.Style.FILL
             paint.textAlign = Paint.Align.LEFT
             paint.color = Color.WHITE
-            paint.textSize = u * 0.38f
-            c.drawText(labels[i], r.left + u * 0.3f, r.centerY() + u * 0.13f, paint)
-            val ax = r.right - u * 4.3f
+            paint.textSize = u * 0.46f
+            c.drawText(labels[i], r.left + u * 0.4f, r.centerY() + u * 0.16f, paint)
+            val lx = r.right - u * 6.2f
+            val rx = r.right - u * 0.7f
+            // botones de flecha grandes
+            for (bx in floatArrayOf(lx, rx)) {
+                paint.color = Color.argb(150, 40, 60, 120)
+                c.drawCircle(bx, r.centerY(), u * 0.5f, paint)
+            }
             paint.textAlign = Paint.Align.CENTER
-            paint.textSize = u * 0.5f
-            paint.color = Color.argb(230, 150, 200, 255)
-            c.drawText("◀", ax, r.centerY() + u * 0.17f, paint)
-            c.drawText("▶", r.right - u * 0.45f, r.centerY() + u * 0.17f, paint)
-            val mxx = (ax + r.right - u * 0.45f) / 2f
+            paint.textSize = u * 0.56f
+            paint.color = Color.argb(240, 190, 220, 255)
+            c.drawText("◀", lx, r.centerY() + u * 0.2f, paint)
+            c.drawText("▶", rx, r.centerY() + u * 0.2f, paint)
+            val mxx = (lx + rx) / 2f
             if (i < 2) {
                 paint.color = Color.WHITE
-                paint.textSize = u * 0.36f
-                c.drawText(values[i], mxx, r.centerY() + u * 0.13f, paint)
+                paint.textSize = u * 0.44f
+                c.drawText(values[i], mxx, r.centerY() + u * 0.16f, paint)
             } else {
                 paint.color = Emblem.palette[cols[i]]
-                rect.set(mxx - u * 0.9f, r.centerY() - u * 0.25f, mxx + u * 0.9f, r.centerY() + u * 0.25f)
-                c.drawRoundRect(rect, u * 0.12f, u * 0.12f, paint)
+                rect.set(mxx - u * 1.6f, r.centerY() - u * 0.36f, mxx + u * 1.6f, r.centerY() + u * 0.36f)
+                c.drawRoundRect(rect, u * 0.16f, u * 0.16f, paint)
+                paint.style = Paint.Style.STROKE
+                paint.color = Color.argb(150, 255, 255, 255)
+                c.drawRoundRect(rect, u * 0.16f, u * 0.16f, paint)
+                paint.style = Paint.Style.FILL
+                paint.textSize = u * 0.26f
+                paint.color = Color.argb(200, 0, 0, 0)
+                c.drawText("tocar", mxx + 1f, r.centerY() + u * 0.1f + 1f, paint)
+                paint.color = Color.argb(230, 255, 255, 255)
+                c.drawText("tocar", mxx, r.centerY() + u * 0.1f, paint)
             }
         }
         val unlockedN = Emblem.symbolNames.indices.count { symUnlocked(it) }
         paint.textAlign = Paint.Align.CENTER
-        paint.textSize = u * 0.32f
+        paint.textSize = u * 0.34f
         paint.color = Color.argb(200, 190, 215, 255)
-        c.drawText("Símbolos desbloqueados: $unlockedN / ${Emblem.symbolNames.size} (consigue logros para más)", width / 2f, emRows[4].bottom + u * 0.6f, paint)
+        c.drawText("Símbolos: $unlockedN / ${Emblem.symbolNames.size} · consigue logros para más", width / 2f, emRows[4].bottom + u * 0.7f, paint)
+    }
+
+    /** Cuadrícula de 8×4 colores para elegir directamente. */
+    private fun drawPalette(c: Canvas) {
+        palAnim += ((if (palPick >= 0) 1f else 0f) - palAnim) * min(1f, frameDt * 12f)
+        if (palAnim < 0.01f) return
+        val k = palAnim
+        paint.style = Paint.Style.FILL
+        paint.color = Color.argb((170 * k).toInt(), 0, 0, 0)
+        c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
+        val sw = u * 1.5f; val gp = u * 0.22f
+        val pw = 8 * sw + 7 * gp + u * 0.8f
+        val ph = 4 * sw + 3 * gp + u * 2f
+        val cy = height * 0.5f + (1f - k) * u * 2f
+        palRect.set(width / 2f - pw / 2f, cy - ph / 2f, width / 2f + pw / 2f, cy + ph / 2f)
+        val al = (255 * k).toInt()
+        paint.color = Color.argb((235 * k).toInt(), 12, 16, 30)
+        c.drawRoundRect(palRect, u * 0.5f, u * 0.5f, paint)
+        paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f
+        paint.color = Color.argb((120 * k).toInt(), 170, 200, 255)
+        c.drawRoundRect(palRect, u * 0.5f, u * 0.5f, paint)
+        paint.style = Paint.Style.FILL
+        paint.textAlign = Paint.Align.CENTER
+        paint.textSize = u * 0.42f
+        paint.color = Color.argb(al, 255, 255, 255)
+        val title = when (palPick) { 2 -> "Color de fondo"; 3 -> "Color de la forma"; else -> "Color del símbolo" }
+        c.drawText(title, palRect.centerX(), palRect.top + u * 0.85f, paint)
+        val cur = when (palPick) { 2 -> emBg; 3 -> emC1; 4 -> emC2; else -> -1 }
+        for (i in Emblem.palette.indices) {
+            val x = palRect.left + u * 0.4f + (i % 8) * (sw + gp)
+            val y = palRect.top + u * 1.4f + (i / 8) * (sw + gp)
+            rect.set(x, y, x + sw, y + sw)
+            val col = Emblem.palette[i]
+            paint.color = Color.argb(al, Color.red(col), Color.green(col), Color.blue(col))
+            c.drawRoundRect(rect, u * 0.22f, u * 0.22f, paint)
+            if (i == cur) {
+                paint.style = Paint.Style.STROKE; paint.strokeWidth = u * 0.09f
+                paint.color = Color.argb(al, 255, 255, 255)
+                rect.inset(-u * 0.08f, -u * 0.08f)
+                c.drawRoundRect(rect, u * 0.26f, u * 0.26f, paint)
+                paint.style = Paint.Style.FILL
+            }
+        }
+    }
+
+    private fun paletteTap(x: Float, y: Float) {
+        val sw = u * 1.5f; val gp = u * 0.22f
+        for (i in Emblem.palette.indices) {
+            val x0 = palRect.left + u * 0.4f + (i % 8) * (sw + gp)
+            val y0 = palRect.top + u * 1.4f + (i / 8) * (sw + gp)
+            if (x >= x0 - gp / 2 && x <= x0 + sw + gp / 2 && y >= y0 - gp / 2 && y <= y0 + sw + gp / 2) {
+                when (palPick) { 2 -> emBg = i; 3 -> emC1 = i; else -> emC2 = i }
+                saveEmblem()
+                break
+            }
+        }
+        palPick = -1
+    }
+
+    private fun saveEmblem() {
+        try { prefs.edit().putInt("em_s", emShape).putInt("em_y", emSym).putInt("em_b", emBg).putInt("em_c1", emC1).putInt("em_c2", emC2).apply() } catch (e: Exception) { }
     }
 
     private fun emblemTap(x: Float, y: Float) {
         for (i in 0 until 5) {
             val r = emRows[i]
-            if (!r.contains(x, y) || x < r.left + u * 3f) continue
-            val d = if (x < (r.right - u * 4.3f + r.right - u * 0.45f) / 2f) -1 else 1
+            if (y < r.top - u * 0.1f || y > r.bottom + u * 0.1f || x < r.right - u * 7f) continue
+            val lx = r.right - u * 6.2f
+            val rx = r.right - u * 0.7f
+            val mxx = (lx + rx) / 2f
+            if (i >= 2 && abs(x - mxx) < u * 1.8f) { palPick = i; return }
+            val d = if (x < mxx) -1 else 1
             when (i) {
                 0 -> emShape = (emShape + d + Emblem.shapeNames.size) % Emblem.shapeNames.size
                 1 -> {
@@ -2356,27 +2673,120 @@ class GameView(ctx: Context) : View(ctx) {
                 3 -> emC1 = (emC1 + d + Emblem.palette.size) % Emblem.palette.size
                 else -> emC2 = (emC2 + d + Emblem.palette.size) % Emblem.palette.size
             }
-            try { prefs.edit().putInt("em_s", emShape).putInt("em_y", emSym).putInt("em_b", emBg).putInt("em_c1", emC1).putInt("em_c2", emC2).apply() } catch (e: Exception) { }
+            saveEmblem()
         }
     }
 
     // ---------- perfil ----------
+    /** Diálogo propio del juego para el nombre de piloto: tarjeta oscura redondeada, campo con contador y botones píldora. */
     private fun editPilotName() {
         post {
             try {
-                val et = android.widget.EditText(context)
-                et.setText(pilot)
-                et.setSingleLine()
-                et.filters = arrayOf(android.text.InputFilter.LengthFilter(16))
-                android.app.AlertDialog.Builder(context)
-                    .setTitle("Nombre de piloto")
-                    .setView(et)
-                    .setPositiveButton("Guardar") { _, _ ->
-                        val n = et.text.toString().trim()
-                        if (n.isNotEmpty()) { pilot = n; try { prefs.edit().putString("pilot", n).apply() } catch (e: Exception) { } }
+                val ctx = context
+                val dp = resources.displayMetrics.density
+                val accent = Color.rgb(90, 150, 255)
+                val dlg = android.app.Dialog(ctx)
+                dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+                val card = android.widget.LinearLayout(ctx).apply {
+                    orientation = android.widget.LinearLayout.VERTICAL
+                    setPadding((22 * dp).toInt(), (20 * dp).toInt(), (22 * dp).toInt(), (18 * dp).toInt())
+                    background = android.graphics.drawable.GradientDrawable(
+                        android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                        intArrayOf(Color.rgb(22, 28, 52), Color.rgb(9, 12, 26))).apply {
+                        cornerRadius = 22 * dp
+                        setStroke((1.5f * dp).toInt(), Color.argb(150, 120, 170, 255))
                     }
-                    .setNegativeButton("Cancelar", null)
-                    .show()
+                    elevation = 18 * dp
+                }
+                val header = android.widget.LinearLayout(ctx).apply {
+                    orientation = android.widget.LinearLayout.HORIZONTAL
+                    gravity = android.view.Gravity.CENTER_VERTICAL
+                }
+                val emb = object : View(ctx) {
+                    val pp = Paint(Paint.ANTI_ALIAS_FLAG)
+                    override fun onDraw(cv: Canvas) {
+                        Emblem.draw(cv, pp, width / 2f, height / 2f, width * 0.95f, emShape, emSym, Emblem.palette[emBg], Emblem.palette[emC1], Emblem.palette[emC2])
+                    }
+                }
+                header.addView(emb, android.widget.LinearLayout.LayoutParams((40 * dp).toInt(), (40 * dp).toInt()))
+                val titles = android.widget.LinearLayout(ctx).apply { orientation = android.widget.LinearLayout.VERTICAL; setPadding((12 * dp).toInt(), 0, 0, 0) }
+                titles.addView(android.widget.TextView(ctx).apply {
+                    text = "NOMBRE DE PILOTO"; setTextColor(Color.WHITE); textSize = 17f
+                    typeface = Typeface.DEFAULT_BOLD; letterSpacing = 0.08f
+                })
+                titles.addView(android.widget.TextView(ctx).apply {
+                    text = "Así te verán en tu perfil"; setTextColor(Color.argb(170, 190, 210, 255)); textSize = 12.5f
+                })
+                header.addView(titles)
+                card.addView(header)
+                val et = android.widget.EditText(ctx).apply {
+                    setText(pilot); setSelection(text.length)
+                    setSingleLine(); imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                    filters = arrayOf(android.text.InputFilter.LengthFilter(16))
+                    setTextColor(Color.WHITE); setHintTextColor(Color.argb(110, 200, 210, 240)); hint = "Escribe tu nombre"
+                    textSize = 18f; typeface = Typeface.DEFAULT_BOLD
+                    setPadding((16 * dp).toInt(), (12 * dp).toInt(), (16 * dp).toInt(), (12 * dp).toInt())
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 14 * dp; setColor(Color.argb(255, 6, 9, 20)); setStroke((1.5f * dp).toInt(), accent)
+                    }
+                    if (android.os.Build.VERSION.SDK_INT >= 29) textCursorDrawable = android.graphics.drawable.GradientDrawable().apply {
+                        setColor(accent); setSize((2 * dp).toInt(), (20 * dp).toInt())
+                    }
+                }
+                card.addView(et, android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = (18 * dp).toInt() })
+                val counter = android.widget.TextView(ctx).apply {
+                    setTextColor(Color.argb(150, 190, 210, 255)); textSize = 11.5f
+                    gravity = android.view.Gravity.END; text = "${pilot.length}/16"
+                }
+                card.addView(counter, android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = (4 * dp).toInt() })
+                et.addTextChangedListener(object : android.text.TextWatcher {
+                    override fun beforeTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                    override fun onTextChanged(a: CharSequence?, b: Int, c: Int, d: Int) {}
+                    override fun afterTextChanged(ed: android.text.Editable?) { counter.text = "${ed?.length ?: 0}/16" }
+                })
+                fun pill(label: String, filled: Boolean) = android.widget.TextView(ctx).apply {
+                    text = label; textSize = 15f; typeface = Typeface.DEFAULT_BOLD; letterSpacing = 0.04f
+                    gravity = android.view.Gravity.CENTER
+                    setTextColor(if (filled) Color.WHITE else Color.argb(230, 190, 210, 255))
+                    setPadding(0, (12 * dp).toInt(), 0, (12 * dp).toInt())
+                    background = android.graphics.drawable.GradientDrawable().apply {
+                        cornerRadius = 40 * dp
+                        if (filled) { setColor(Color.rgb(56, 110, 230)) } else { setColor(Color.TRANSPARENT); setStroke((1.5f * dp).toInt(), Color.argb(140, 150, 180, 255)) }
+                    }
+                    isClickable = true
+                }
+                val row = android.widget.LinearLayout(ctx).apply { orientation = android.widget.LinearLayout.HORIZONTAL }
+                val cancel = pill("Cancelar", false)
+                val save = pill("Guardar", true)
+                row.addView(cancel, android.widget.LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = (6 * dp).toInt() })
+                row.addView(save, android.widget.LinearLayout.LayoutParams(0, -2, 1f).apply { leftMargin = (6 * dp).toInt() })
+                card.addView(row, android.widget.LinearLayout.LayoutParams(-1, -2).apply { topMargin = (16 * dp).toInt() })
+                val commit = {
+                    val n = et.text.toString().trim()
+                    if (n.isNotEmpty()) { pilot = n; try { prefs.edit().putString("pilot", n).apply() } catch (e: Exception) { } }
+                    dlg.dismiss(); invalidate()
+                }
+                cancel.setOnClickListener { dlg.dismiss() }
+                save.setOnClickListener { commit() }
+                et.setOnEditorActionListener { _, id, _ -> if (id == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) { commit(); true } else false }
+                val wrap = android.widget.FrameLayout(ctx).apply { setPadding((24 * dp).toInt(), 0, (24 * dp).toInt(), 0) }
+                wrap.addView(card, android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.CENTER))
+                dlg.setContentView(wrap)
+                dlg.window?.let { wdw ->
+                    wdw.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+                    wdw.setLayout(-1, -2)
+                    wdw.setDimAmount(0.65f)
+                    wdw.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                    wdw.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or
+                        android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+                }
+                card.alpha = 0f; card.scaleX = 0.9f; card.scaleY = 0.9f
+                dlg.setOnShowListener {
+                    card.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(220)
+                        .setInterpolator(android.view.animation.DecelerateInterpolator()).start()
+                    et.requestFocus()
+                }
+                dlg.show()
             } catch (e: Exception) { }
         }
     }
@@ -2510,7 +2920,7 @@ class GameView(ctx: Context) : View(ctx) {
         shipBusy = true
         Thread {
             val tiles = DiskCache.loadSprites(dir, i, 28)
-                ?: Textures.makeShipSprites(BASE, f).also { t -> saveAsync { DiskCache.saveSprites(dir, i, t) } }
+                ?: Textures.makeShipSprites(BASE, f, spriteCp()).also { t -> saveAsync { DiskCache.saveSprites(dir, i, t) } }
             glows = Array(7) { Textures.makeGlow(f.accent(BASE[it])) }
             flameA = Textures.makeGlow(f.flameA)
             flameB = Textures.makeGlow(f.flameB)
@@ -2823,6 +3233,8 @@ class GameView(ctx: Context) : View(ctx) {
                         try { prefs.edit().putBoolean("voice", announcer.enabled).apply() } catch (ex: Exception) { }
                         if (announcer.enabled) announcer.say(Announcer.DEVAST)
                     } else if (closeRect.contains(e.x, e.y) || !panelRect.contains(e.x, e.y)) settingsOpen = false
+                } else if (phase == 0 && palPick >= 0) {
+                    paletteTap(e.x, e.y)
                 } else if (phase == 0) {
                     if (gearC.contains(sx, sy) && gearC.contains(e.x, e.y)) { settingsOpen = true; return true }
                     if (tabRect0.contains(sx, sy) && tabRect0.contains(e.x, e.y)) { switchTab(0); return true }

@@ -35,7 +35,7 @@ class Announcer(private val ctx: Context) {
         const val SPREE = 4; const val FRENZY = 5; const val UNSTOP = 6; const val RAMPAGE = 7
         const val UNTOUCH = 8; const val INVINC = 9; const val DETON = 10; const val DEMOL = 11
         const val LIMIT = 12; const val RECORD = 13; const val PROMO = 14
-        private const val VER = "v1"
+        private const val VER = "v2"
     }
 
     var enabled = true
@@ -50,6 +50,7 @@ class Announcer(private val ctx: Context) {
 
     /** Llamar desde el hilo principal: carga la voz guardada o la genera en segundo plano. */
     fun start() {
+        try { dir.listFiles()?.forEach { if (it.name.startsWith("vox_") && !it.name.startsWith("vox_${VER}_")) it.delete() } } catch (e: Exception) { }
         if (PHRASES.indices.all { outFile(it).exists() }) { Thread { loadPool() }.start(); return }
         try {
             tts = TextToSpeech(ctx.applicationContext) { status ->
@@ -66,8 +67,9 @@ class Announcer(private val ctx: Context) {
             for (l in locales) if (t.isLanguageAvailable(l) >= TextToSpeech.LANG_AVAILABLE) { chosen = l; break }
             if (chosen == null) { t.shutdown(); return }
             t.language = chosen
-            t.setPitch(0.62f)
-            t.setSpeechRate(0.88f)
+            pickMaleVoice(t, chosen)
+            t.setPitch(0.74f)
+            t.setSpeechRate(0.97f)
             for (i in PHRASES.indices) {
                 val raw = File(dir, "vox_raw_$i.wav")
                 val latch = CountDownLatch(1)
@@ -86,6 +88,23 @@ class Announcer(private val ctx: Context) {
         try { t.shutdown() } catch (e: Exception) { }
         tts = null
         loadPool()
+    }
+
+    /** Elige una voz masculina del idioma si el motor la ofrece (Google: es-xx-x-...-local con "male"). */
+    private fun pickMaleVoice(t: TextToSpeech, loc: Locale) {
+        try {
+            val vs = t.voices ?: return
+            val same = vs.filter { it.locale.language == "es" && !it.isNetworkConnectionRequired }
+                .sortedByDescending { (if (it.locale.country == loc.country) 2 else 0) + if (it.quality >= 400) 1 else 0 }
+            val male = same.firstOrNull { v ->
+                val n = v.name.lowercase()
+                n.contains("male") && !n.contains("female") || v.features.any { it.lowercase().contains("gender=male") }
+            } ?: same.firstOrNull { v ->
+                // en voces de Google, las variantes "-x-eed", "-x-esd", "-x-esf" suelen ser masculinas
+                val n = v.name.lowercase(); n.contains("-x-eed") || n.contains("-x-esd") || n.contains("-x-ese") || n.contains("-x-esf")
+            }
+            if (male != null) t.voice = male
+        } catch (e: Exception) { }
     }
 
     /** Lee un WAV PCM de 16 bits (mono o estéreo) y devuelve muestras y frecuencia. */
@@ -126,8 +145,8 @@ class Announcer(private val ctx: Context) {
         while (a < b && abs(x0[a]) < 0.01f) a++
         while (b > a && abs(x0[b]) < 0.01f) b--
         if (b - a < 100) return
-        // tono un poco más grave por re-muestreo (más lento y profundo)
-        val ratio = 0.9f
+        // tono un poco más grave por re-muestreo (apenas más lento)
+        val ratio = 0.94f
         val n = ((b - a) / ratio).toInt()
         val y = FloatArray(n + (0.5f * sr).toInt())
         for (i in 0 until n) {
@@ -136,10 +155,21 @@ class Announcer(private val ctx: Context) {
             val fr = pos - k
             y[i] = x0[k] * (1f - fr) + x0[min(k + 1, x0.size - 1)] * fr
         }
-        // refuerzo de graves (paso bajo de un polo sumado)
-        var lp = 0f
-        val al = 1f - exp(-2f * Math.PI.toFloat() * 220f / sr)
-        for (i in y.indices) { lp += al * (y[i] - lp); y[i] = y[i] + 0.6f * lp }
+        // paso alto a 80 Hz (quita retumbe), cuerpo grave moderado y presencia en 2-4 kHz (claridad)
+        val twoPi = 2f * Math.PI.toFloat()
+        var hp = 0f; var lp = 0f; var b1 = 0f; var b2 = 0f
+        val ah = 1f - exp(-twoPi * 80f / sr)
+        val al = 1f - exp(-twoPi * 200f / sr)
+        val a1 = 1f - exp(-twoPi * 1900f / sr)
+        val a2 = 1f - exp(-twoPi * 4200f / sr)
+        for (i in y.indices) {
+            hp += ah * (y[i] - hp)
+            val x = y[i] - hp
+            lp += al * (x - lp)
+            b1 += a1 * (x - b1); b2 += a2 * (x - b2)
+            val presence = b2 - b1
+            y[i] = x + 0.35f * lp + 0.55f * presence
+        }
         // normalizar y comprimir
         var pk = 1e-6f
         for (v in y) pk = max(pk, abs(v))
@@ -149,9 +179,9 @@ class Announcer(private val ctx: Context) {
             val v = y[i] / pk
             val av = abs(v)
             env = if (av > env) att * env + (1 - att) * av else rel * env + (1 - rel) * av
-            val thr = 0.25f
-            val gain = if (env > thr) (thr + (env - thr) / 4f) / env else 1f
-            y[i] = tanh(v * gain * 2.4f) / tanh(2.4f)
+            val thr = 0.35f
+            val gain = if (env > thr) (thr + (env - thr) / 2.5f) / env else 1f
+            y[i] = tanh(v * gain * 1.5f) / tanh(1.5f)
         }
         // reverberación de sala corta (Schroeder: 4 peines + 2 pasa-todo)
         val wet = FloatArray(y.size)
@@ -160,7 +190,7 @@ class Announcer(private val ctx: Context) {
             val buf = FloatArray(d); var idx = 0
             for (i in y.indices) {
                 val o = buf[idx]
-                buf[idx] = y[i] + o * 0.72f
+                buf[idx] = y[i] + o * 0.6f
                 idx = (idx + 1) % d
                 wet[i] += o * 0.25f
             }
@@ -176,7 +206,7 @@ class Announcer(private val ctx: Context) {
             }
         }
         var pk2 = 1e-6f
-        for (i in y.indices) { y[i] = y[i] * 0.85f + wet[i] * 0.22f; pk2 = max(pk2, abs(y[i])) }
+        for (i in y.indices) { y[i] = y[i] * 0.92f + wet[i] * 0.12f; pk2 = max(pk2, abs(y[i])) }
         writeWav(dst, y, sr, 0.95f / pk2)
     }
 

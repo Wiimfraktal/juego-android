@@ -43,7 +43,8 @@ object Achievements {
     )
 
     /** Símbolos de emblema que se desbloquean con un logro (índice de símbolo -> id de logro). */
-    val symbolLocks = mapOf(8 to "racha10", 9 to "devast", 10 to "bombas25", 11 to "nivel10", 12 to "pts25k", 13 to "lineas1000")
+    val symbolLocks = mapOf(8 to "racha10", 9 to "devast", 10 to "bombas25", 11 to "nivel10", 12 to "pts25k", 13 to "lineas1000",
+        20 to "racha5", 24 to "nivel5", 26 to "naves500", 29 to "barras50")
 }
 
 /** Estadísticas del piloto guardadas en SharedPreferences (claves "st_<nombre>"). */

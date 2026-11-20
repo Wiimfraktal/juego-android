@@ -102,7 +102,7 @@ class Game(val cols: Int, val rows: Int) {
 
     init { spawn() }
 
-    fun barNeed() = 600 + 260 * barsFilled
+    fun barNeed() = 690 + 300 * barsFilled
 
     fun addIron(a: Int) {
         barProgress += a
