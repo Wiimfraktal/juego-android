@@ -412,6 +412,41 @@ def neutron(lib, band):
     return m.finish(wet=0.3, rt60=1.6, bass=0.15, room=True, sat=0.9)
 
 
+def epica_coro(lib, band):
+    """Épica para el menú: lenta, con coro masculino grave tipo gregoriano (solo vocales), cuerdas y timbal suave."""
+    bpm = 66
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    m = Mix(16 * bar, tail=5.0)
+    D, Bb, F, C, G, A = 38, 34, 41, 36, 31, 33
+    prog = [(D, MIN), (Bb, MAJ), (F, MAJ), (C, MAJ), (D, MIN), (G, MIN), (Bb, MAJ), (A, MAJ)] * 2
+    for b, (root, q) in enumerate(prog):
+        t0 = b * bar
+        tri = triad(root, q)
+        m.add(t0, lib.cb.note(root, bar + 0.4, att=0.4, rel=1.2), 0.4)
+        m.add(t0, lib.vc.note(root + 12, bar + 0.4, att=0.5, rel=1.2), 0.3, pan=-0.3)
+        # coro: tónica y quinta graves (y tercera arriba en la segunda vuelta), vocal que pasa de O a A
+        voices = [root + 12, root + 19] + ([root + 24 + q] if b >= 8 else [])
+        for i, n in enumerate(voices):
+            sig = mm.voice(mm.midi(n), bar + 0.6, mm.OH, a=1.0, r=1.4, ens=7, depth=0.003, nh=30, tilt=1.2, vowel2=mm.AH)
+            m.add(t0, sig, 0.16 if i < 2 else 0.1, pan=(-0.25, 0.25, 0.0)[i])
+        if b >= 8:
+            m.add(t0, lib.vla.note(tri[1] + 24 if tri[1] + 24 < 70 else tri[1] + 12, bar + 0.4, att=0.6, rel=1.2), 0.1, pan=0.4)
+        if b in (0, 8):
+            m.add(t0, hit(lib.timp_lo, 4.0), 0.22, pan=-0.2)
+    # melodía de la Épica cantada en unísono grave, a medio tiempo
+    mel = [(62, 0, 2), (69, 2, 2), (65, 4, 1), (67, 5, 1), (69, 6, 1.5), (70, 7.5, 0.5), (72, 8, 3), (69, 11, 1),
+           (67, 12, 2), (64, 14, 1), (67, 15, 1), (74, 16, 2), (69, 18, 1), (65, 19, 1), (67, 20, 1.5), (69, 21.5, 0.5),
+           (70, 22, 2), (74, 24, 2), (77, 26, 2), (76, 28, 3), (73, 31, 1)]
+    for base in (0, 8):
+        for n, bt, d in mel:
+            st = base * bar + bt * beat
+            sig = mm.voice(mm.midi(n - 12), d * beat + 0.3, mm.OH, a=0.25, r=0.6, ens=6, depth=0.0025, nh=30, tilt=1.1)
+            m.add(st, sig, 0.2, pan=0.05)
+    m.add(8 * bar, hit(lib.susp), 0.15, pan=0.3)
+    return m.finish(wet=0.5, rt60=4.0, bass=0.2, room=True, sat=0.9)
+
+
 def brighten(st, amt=0.7):
     """Presencia y aire (realce sobre 3 kHz) tras la mezcla."""
     out = st.copy()
@@ -541,4 +576,6 @@ if __name__ == "__main__":
         mm.save(brighten(neutron(lib, band), 0.8), out, "theme_neutron")
     if what in ("all", "duro"):
         mm.save(brighten(duro(lib, band), 0.8), out, "theme_duro")
+    if what in ("all", "coro"):
+        mm.save(brighten(epica_coro(lib, band), 0.4), out, "theme_coro")
     print("ok")

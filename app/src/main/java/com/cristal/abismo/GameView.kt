@@ -37,6 +37,8 @@ class GameView(ctx: Context) : View(ctx) {
     )
 
     private class Star(var ang: Float, var dist: Float, val z: Float)
+    /** Estrella del viaje de la pantalla de carga (coordenadas 3D). */
+    private class TStar(var x: Float, var y: Float, var z: Float, var pz: Float, val b: Float)
 
     /** Objeto cósmico: 0 asteroide, 1 cometa, 2 luna, 3 satélite. */
     private class Cosmic(val kind: Int, var ang: Float, var dist: Float, var z: Float, var rot: Float, var rotSp: Float, var spr: Int, var size: Float)
@@ -67,6 +69,7 @@ class GameView(ctx: Context) : View(ctx) {
         const val HOLD = 0.9f      // la cámara se queda cerca mientras explota
         const val PULL = 2.5f      // duración del alejamiento
         const val MENU_SC = 1.9f
+        const val APPROACH = 1.6f
         val BASE = intArrayOf(
             Color.rgb(0, 229, 255), Color.rgb(255, 196, 0), Color.rgb(176, 64, 255),
             Color.rgb(0, 255, 140), Color.rgb(255, 40, 150), Color.rgb(50, 110, 255),
@@ -476,10 +479,10 @@ class GameView(ctx: Context) : View(ctx) {
         c.rotSp = (Random.nextFloat() - 0.5f) * 60f
         c.spr = Random.nextInt(5)
         c.size = when (c.kind) {
-            0 -> s * (1.2f + Random.nextFloat() * 2.2f)
+            0 -> s * (0.55f + Random.nextFloat() * 1.1f)
             1 -> s * 0.9f
-            2 -> s * (2.5f + Random.nextFloat() * 2f)
-            else -> s * (1.4f + Random.nextFloat() * 0.8f)
+            2 -> s * (1.4f + Random.nextFloat() * 1.1f)
+            else -> s * (0.8f + Random.nextFloat() * 0.5f)
         }
     }
 
@@ -623,7 +626,13 @@ class GameView(ctx: Context) : View(ctx) {
         last = now
         time += dt
         msgT = max(0f, msgT - dt)
-        if (phase == -1 && loaded) { phase = 0; phaseT = 0f }
+        if (phase == -1) {
+            travelT += dt
+            if (loaded && travelT > 3.2f && approachT < 0f) approachT = 0f
+            if (approachT >= 0f) approachT += dt
+            if (approachT >= APPROACH) { phase = 0; phaseT = 0f; loadFade = 1f }
+        }
+        loadFade = max(0f, loadFade - dt * 1.6f)
         dispProgress += (progress - dispProgress) * min(1f, dt * 6f)
 
         if (phase == 1) {
@@ -633,7 +642,9 @@ class GameView(ctx: Context) : View(ctx) {
 
         // música: calmada en carga y menú, épica en partida (vuelve a la calmada tras perder)
         val shopMusic = phase == 0 && tab == 1 && subTab == 4
-        music.play(if (shopMusic) 1 + previewTheme else if (phase <= 0 || (phase == 2 && g.over && g.overTime > 1.5f)) 0 else 1 + themeSel)
+        val coral = MusicThemes.all.size - 1
+        music.play(if (shopMusic) 1 + previewTheme else if (phase <= 0 || (phase == 2 && g.over && g.overTime > 1.5f)) (if (themeSel == coral) 1 + coral else 0)
+            else if (themeSel == coral) 1 else 1 + themeSel)
         val wantBg = if (phase == 0 && tab == 1 && subTab == 3) previewBg else bgSel
         if (wantBg != curBg) applyBg(wantBg)
         music.duck = if (paused) 0.35f else if (soloT > 0f) 0.4f else 1f
@@ -725,7 +736,11 @@ class GameView(ctx: Context) : View(ctx) {
         if (shake > 0f) canvas.translate((Random.nextFloat() - 0.5f) * shake * s * 0.35f, (Random.nextFloat() - 0.5f) * shake * s * 0.35f)
         drawSpace(canvas)
         if (phase == 2) drawEventBack(canvas)
-        if (phase >= 0) drawPlanet(canvas, g)
+        if (phase == -1 && approachT >= 0f) {
+            val e = (approachT / APPROACH).coerceIn(0f, 1f)
+            planetSc = MENU_SC * (0.04f + 0.96f * e * e * (3f - 2f * e))
+        }
+        if (phase >= 0 || approachT >= 0f) drawPlanet(canvas, g)
         if (phase == 2 && evKind == 3) drawEclipse(canvas)
         drawHaze(canvas)
         if (phase == 2) {
@@ -748,6 +763,7 @@ class GameView(ctx: Context) : View(ctx) {
             drawEventBanner(canvas)
         } else if (phase == -1) drawLoading(canvas)
         else drawMenu(canvas)
+        if (loadFade > 0f && phase == 0) { paint.color = Color.argb((90 * loadFade).toInt(), 0, 0, 0); paint.style = Paint.Style.FILL; canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint) }
         drawAchToast(canvas)
         if (flashWhite > 0f) {
             paint.style = Paint.Style.FILL
@@ -898,6 +914,7 @@ class GameView(ctx: Context) : View(ctx) {
         val maxD = hypot(width.toFloat(), height.toFloat()) / 2f + 20f
         for (st in stars) {
             st.dist -= st.dist * (0.45f + 0.9f * st.z) * starSpeed * dt
+            st.ang += (0.006f + 0.01f * st.z) * dt
             if (st.dist < planetR * 0.9f) { st.dist = maxD * (0.75f + Random.nextFloat() * 0.25f); st.ang = Random.nextFloat() * 6.2832f }
         }
         for (c in cosmic) {
@@ -978,16 +995,16 @@ class GameView(ctx: Context) : View(ctx) {
             val ca = cos(st.ang); val sa = sin(st.ang)
             val px = ccx + ca * st.dist
             val py = ccy + sa * st.dist
-            val tw = 0.75f + 0.25f * sin(time * 3f + st.ang * 40f)
+            val tw = 0.7f + 0.18f * sin(time * (2.2f + st.z * 3f) + st.ang * 40f) + 0.12f * sin(time * (7.3f + st.ang * 5f) + st.dist)
             val tint = (st.ang * 100f).toInt() and 3
             val tr = if (tint == 0) 255 else if (tint == 1) 185 else 235
             val tg = if (tint == 0) 232 else if (tint == 1) 212 else 240
             val tb = if (tint == 0) 195 else 255
-            paint.strokeWidth = 1.2f + 2.2f * st.z
+            paint.strokeWidth = 0.9f + 1.6f * st.z
             paint.color = Color.argb((fade * tw * (70f + 185f * st.z)).toInt().coerceIn(0, 255), tr, tg, tb)
             c.drawLine(px, py, ccx + ca * (st.dist + len), ccy + sa * (st.dist + len), paint)
-            if (wh != null && st.z > 0.5f) {
-                val r = s * (0.6f + 0.9f * st.z)
+            if (wh != null && st.z > 0.62f) {
+                val r = s * (0.22f + 0.55f * (st.z - 0.62f) / 0.38f) * (0.85f + 0.3f * tw)
                 rect.set(px - r, py - r, px + r, py + r)
                 addPaint.alpha = (fade * tw * 210f).toInt().coerceIn(0, 255)
                 c.drawBitmap(wh, null, rect, addPaint)
@@ -2103,7 +2120,98 @@ class GameView(ctx: Context) : View(ctx) {
         return lines
     }
 
+    private var travelT = 0f
+    private var approachT = -1f
+    private var loadFade = 0f
+    private var travelStars: Array<TStar>? = null
+    private var travelGalaxy: Bitmap? = null
+    private var travelZ = 0f
+
+    /**
+     * Viaje de la pantalla de carga: desde una galaxia lejana que crece y nos envuelve, pasando entre estrellas
+     * en 3D, nubes de neblina cósmica y soles lejanos, hasta llegar al planeta (que aparece cuando todo cargó).
+     */
+    private fun drawTravel(c: Canvas, alpha: Float) {
+        val w = width.toFloat(); val h = height.toFloat()
+        val cx = w / 2f; val cy = h * 0.45f
+        val dt = frameDt
+        val al = alpha.coerceIn(0f, 1f)
+        // velocidad: arranca suave, acelera en el viaje y frena al llegar
+        val arrive = if (approachT >= 0f) (approachT / APPROACH).coerceIn(0f, 1f) else 0f
+        val v = (0.25f + 1.6f * (travelT / 2.5f).coerceIn(0f, 1f)) * (1f - 0.85f * arrive)
+        travelZ += v * dt
+        paint.style = Paint.Style.FILL
+        paint.shader = null
+        paint.color = Color.argb((255 * al * (1f - arrive * 0.85f)).toInt(), 2, 3, 10)
+        c.drawRect(0f, 0f, w, h, paint)
+        if (travelGalaxy == null) travelGalaxy = galaxyBmp ?: try { Textures.makeGalaxy(192) } catch (e: Exception) { null }
+        // galaxia: crece exponencialmente y se desvanece cuando la atravesamos
+        val gb = travelGalaxy
+        if (gb != null) {
+            val gs = w * 0.35f * kotlin.math.exp(travelZ * 0.9f)
+            val ga = (1f - ((gs / w) - 1.2f) / 2.5f).coerceIn(0f, 1f)
+            if (ga > 0f) {
+                c.save(); c.translate(cx, cy); c.rotate(-20f + travelT * 3f); c.scale(1f, 0.6f)
+                rect.set(-gs, -gs, gs, gs)
+                addPaint.alpha = (230 * ga * al).toInt()
+                c.drawBitmap(gb, null, rect, addPaint)
+                c.restore()
+            }
+        }
+        // neblina cósmica: capas que vienen hacia la cámara y la rodean
+        val hz = haze
+        if (hz != null) {
+            for (k in 0 until 4) {
+                val ph = ((travelZ * 0.45f + k / 4f) % 1f)
+                val sc = 0.4f + ph * ph * 4f
+                val a = kotlin.math.sin(ph * PI.toFloat()) * 0.9f
+                c.save(); c.translate(cx, cy); c.rotate(k * 77f + travelT * 2f)
+                rect.set(-w * sc, -h * sc, w * sc, h * sc)
+                addPaint.alpha = (200 * a * al * (0.4f + 0.6f * (travelZ / 2f).coerceIn(0f, 1f))).toInt().coerceIn(0, 255)
+                c.drawBitmap(hz, null, rect, addPaint)
+                c.restore()
+            }
+        }
+        // estrellas en 3D con estela según la velocidad
+        val ts = travelStars ?: Array(260) {
+            TStar((Random.nextFloat() - 0.5f) * 2f, (Random.nextFloat() - 0.5f) * 2f, 0.05f + Random.nextFloat(), 0f, 0.4f + Random.nextFloat() * 0.6f)
+        }.also { travelStars = it }
+        val f = w * 0.5f
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.style = Paint.Style.STROKE
+        for (st in ts) {
+            st.pz = st.z
+            st.z -= v * dt * 0.55f
+            if (st.z <= 0.02f) { st.x = (Random.nextFloat() - 0.5f) * 2f; st.y = (Random.nextFloat() - 0.5f) * 2f; st.z = 1f; st.pz = 1f }
+            val x1 = cx + st.x / st.z * f * 0.5f; val y1 = cy + st.y / st.z * f * 0.5f
+            val x0 = cx + st.x / st.pz * f * 0.5f; val y0 = cy + st.y / st.pz * f * 0.5f
+            if (x1 < -20 || x1 > w + 20 || y1 < -20 || y1 > h + 20) continue
+            val near = (1f - st.z).coerceIn(0f, 1f)
+            paint.strokeWidth = 1f + 2.2f * near * st.b
+            paint.color = Color.argb((al * 255 * st.b * (0.25f + 0.75f * near)).toInt().coerceIn(0, 255), 225, 232, 255)
+            c.drawLine(x0, y0, x1, y1, paint)
+        }
+        paint.style = Paint.Style.FILL
+        // soles lejanos que pasan a los lados
+        val wh = sprWhite
+        if (wh != null) {
+            for (k in 0 until 3) {
+                val ph = ((travelZ * 0.3f + k * 0.37f) % 1f)
+                val zz = 1f - ph
+                if (zz < 0.08f) continue
+                val ang = k * 2.1f + 0.6f
+                val px = cx + cos(ang) * 0.55f / zz * f * 0.5f; val py = cy + sin(ang) * 0.4f / zz * f * 0.5f
+                val r = u * 0.6f / zz
+                rect.set(px - r, py - r, px + r, py + r)
+                addPaint.alpha = (al * 200 * (1f - zz) * (if (k == 1) 0.7f else 1f)).toInt().coerceIn(0, 255)
+                c.drawBitmap(if (k == 1) (sprFire ?: wh) else wh, null, rect, addPaint)
+            }
+        }
+    }
+
     private fun drawLoading(c: Canvas) {
+        drawTravel(c, if (approachT >= 0f) 1f - (approachT / APPROACH).coerceIn(0f, 1f) else 1f)
+        if (approachT >= 0f) return
         paint.style = Paint.Style.FILL
         paint.typeface = Typeface.DEFAULT_BOLD
         paint.textAlign = Paint.Align.CENTER
