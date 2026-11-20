@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -55,12 +56,12 @@ object Noise {
 class PlanetData(val bmp: Bitmap, val cities: FloatArray)
 
 object Textures {
-    private fun smooth(a: Float, b: Float, x: Float): Float {
+    fun smooth(a: Float, b: Float, x: Float): Float {
         val t = ((x - a) / (b - a)).coerceIn(0f, 1f)
         return t * t * (3f - 2f * t)
     }
 
-    private fun cl(v: Float) = v.toInt().coerceIn(0, 255)
+    fun cl(v: Float) = v.toInt().coerceIn(0, 255)
 
     /** Transformada de distancia (chaflán 1 / 1.414): distancia de cada píxel "dentro" al píxel "fuera" más cercano. */
     private fun distField(inside: BooleanArray, w: Int, h: Int, oobInside: Boolean): FloatArray {
@@ -622,6 +623,129 @@ object Textures {
         val flat = FloatArray(out.size * 2)
         for (i in out.indices) { flat[i * 2] = out[i][0]; flat[i * 2 + 1] = out[i][1] }
         return PlanetData(Bitmap.createBitmap(px, d, d, Bitmap.Config.ARGB_8888), flat)
+    }
+
+    /**
+     * Mapa de la superficie en proyección equirectangular (ancho = 2 × alto), sin luz: el mismo diseño que
+     * makePlanet (continentes, océanos, desierto, hielo, cráteres, grietas y nubes) para hacer girar el planeta.
+     */
+    fun makeSurfaceMap(h: Int, skin: Skin): IntArray {
+        val w = h * 2
+        val px = IntArray(w * h)
+        val oDr = Color.red(skin.oceanDeep).toFloat(); val oDg = Color.green(skin.oceanDeep).toFloat(); val oDb = Color.blue(skin.oceanDeep).toFloat()
+        val oSr = Color.red(skin.oceanShallow).toFloat(); val oSg = Color.green(skin.oceanShallow).toFloat(); val oSb = Color.blue(skin.oceanShallow).toFloat()
+        val lLr = Color.red(skin.landLow).toFloat(); val lLg = Color.green(skin.landLow).toFloat(); val lLb = Color.blue(skin.landLow).toFloat()
+        val lHr = Color.red(skin.landHigh).toFloat(); val lHg = Color.green(skin.landHigh).toFloat(); val lHb = Color.blue(skin.landHigh).toFloat()
+        val dsr = Color.red(skin.desert).toFloat(); val dsg = Color.green(skin.desert).toFloat(); val dsb = Color.blue(skin.desert).toFloat()
+        val icr = Color.red(skin.ice).toFloat(); val icg = Color.green(skin.ice).toFloat(); val icb = Color.blue(skin.ice).toFloat()
+        val clr = Color.red(skin.cloud).toFloat(); val clg = Color.green(skin.cloud).toFloat(); val clb = Color.blue(skin.cloud).toFloat()
+        val ccR = Color.red(skin.crackColor).toFloat(); val ccG = Color.green(skin.crackColor).toFloat(); val ccB = Color.blue(skin.crackColor).toFloat()
+        val thr = skin.landThr
+        fun work(ya: Int, yb: Int) {
+            for (y in ya until yb) {
+                val lat = (0.5f - (y + 0.5f) / h) * PI.toFloat()
+                val cl0 = cos(lat); val sl = sin(lat)
+                for (x in 0 until w) {
+                    val lon = ((x + 0.5f) / w * 2f - 1f) * PI.toFloat()
+                    val qx = cl0 * sin(lon); val qy = -sl; val qz = cl0 * cos(lon)
+                    val sx0 = qx * skin.freq + 3.1f + skin.seed; val sy0 = qy * skin.freq + 1.7f + skin.seed * 0.7f; val sz0 = qz * skin.freq + 5.3f + skin.seed * 1.3f
+                    val sx = sx0 + (Noise.fbm(sx0 * 0.7f + 17f, sy0 * 0.7f, sz0 * 0.7f, 2) - 0.5f) * 0.9f
+                    val sy = sy0 + (Noise.fbm(sx0 * 0.7f, sy0 * 0.7f + 29f, sz0 * 0.7f, 2) - 0.5f) * 0.9f
+                    val sz = sz0 + (Noise.fbm(sx0 * 0.7f, sy0 * 0.7f, sz0 * 0.7f + 41f, 2) - 0.5f) * 0.9f
+                    val c0 = Noise.fbm(sx, sy, sz, 6)
+                    val cRid = 1f - abs(2f * c0 - 1f)
+                    val cMix = c0 * (1f - skin.ridge) + cRid * 0.72f * skin.ridge
+                    val c = if (skin.bands > 0f) cMix + skin.bands * 0.10f * sin(qy * 12f + 4f * c0) else cMix
+                    val la = abs(qy)
+                    val land = smooth(thr, thr + 0.035f, c)
+                    val moist = if (land > 0.02f) Noise.fbm(sx * 2f + 11f, sy * 2f, sz * 2f, 4) else 0.5f
+                    val depth = smooth(thr - 0.20f, thr + 0.02f, c)
+                    val orr = oDr + (oSr - oDr) * depth; val og = oDg + (oSg - oDg) * depth; val ob = oDb + (oSb - oDb) * depth
+                    val e = ((c - thr - 0.035f) / 0.25f).coerceIn(0f, 1f)
+                    var lr: Float; var lg: Float; var lb: Float
+                    if (moist < 0.45f && la < 0.62f) { lr = dsr; lg = dsg; lb = dsb } else { lr = lLr; lg = lLg; lb = lLb }
+                    lr += (lHr - lr) * e * 0.8f; lg += (lHg - lg) * e * 0.8f; lb += (lHb - lb) * e * 0.8f
+                    val bump = (Noise.fbm(sx * 5f, sy * 5f, sz * 5f, 3) - 0.5f) * 0.4f * land
+                    var r = (orr + (lr - orr) * land) * (1f + bump)
+                    var g = (og + (lg - og) * land) * (1f + bump)
+                    var b = (ob + (lb - ob) * land) * (1f + bump)
+                    val crat = if (skin.craters > 0f && land > 0.3f) smooth(0.60f, 0.70f, Noise.fbm(sx * 3.5f, sy * 3.5f, sz * 3.5f + 9f, 3)) else 0f
+                    val cf = 1f - 0.38f * skin.craters * crat
+                    r *= cf; g *= cf; b *= cf
+                    if (skin.crack > 0f && land > 0.2f) {
+                        val rid = 1f - abs(2f * Noise.fbm(sx * 2.3f + 7f, sy * 2.3f, sz * 2.3f, 4) - 1f)
+                        val cm = smooth(0.93f - 0.05f * skin.crack, 0.985f, rid) * skin.crack * land
+                        r += (ccR - r) * cm; g += (ccG - g) * cm; b += (ccB - b) * cm
+                    }
+                    val ice = smooth(0.80f - skin.iceBias, 0.90f - skin.iceBias, la + (if (la > 0.45f) Noise.fbm(sx * 3f, sy * 3f, sz * 3f, 3) - 0.5f else 0f) * 0.18f)
+                    r += (icr - r) * ice; g += (icg - g) * ice; b += (icb - b) * ice
+                    val cn = Noise.fbm(sx * 1.5f + 40f, sy * 1.5f * skin.cloudStretch, sz * 1.5f + 7f, 4)
+                    val cloud = smooth(0.50f, 0.72f, cn) * skin.cloudAmt
+                    r = r * (1f - cloud) + clr * cloud; g = g * (1f - cloud) + clg * cloud; b = b * (1f - cloud) + clb * cloud
+                    px[y * w + x] = Color.rgb(cl(r), cl(g), cl(b))
+                }
+            }
+        }
+        val nt = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+        val ths = Array(nt) { i -> Thread { try { work(h * i / nt, h * (i + 1) / nt) } catch (e: Throwable) { } }.also { it.start() } }
+        for (t in ths) t.join()
+        return px
+    }
+
+    /**
+     * Planeta que gira sobre su eje vertical con la luz fija: cada cuadro proyecta el mapa equirectangular
+     * sobre el disco con tablas precalculadas (latitud, longitud y sombreado de cada píxel).
+     */
+    class Spinner(val map: IntArray, val mh: Int, val r: Int, skin: Skin) {
+        private val mw = mh * 2
+        val d = r * 2
+        private val rowIdx = IntArray(d * d) { -1 }
+        private val lonIdx = FloatArray(d * d)
+        private val shade = FloatArray(d * d)
+        private val hazeA = FloatArray(d * d)
+        private val out = IntArray(d * d)
+        val bmp: Bitmap = Bitmap.createBitmap(d, d, Bitmap.Config.ARGB_8888)
+        private val atr = Color.red(skin.atmo).toFloat(); private val atg = Color.green(skin.atmo).toFloat(); private val atb = Color.blue(skin.atmo).toFloat()
+
+        init {
+            val ll = sqrt(0.62f * 0.62f + 0.38f * 0.38f + 0.68f * 0.68f)
+            val lx = -0.62f / ll; val ly = -0.38f / ll; val lz = 0.68f / ll
+            for (y in 0 until d) for (x in 0 until d) {
+                val nx = (x + 0.5f - r) / r; val ny = (y + 0.5f - r) / r
+                val rr = nx * nx + ny * ny
+                if (rr >= 1f) continue
+                val nz = sqrt(1f - rr)
+                // misma inclinación del eje que makePlanet
+                val qx = nx * 0.92f; val qy = ny * 0.92f + nz * 0.39f; val qz = nz * 0.92f - ny * 0.39f
+                val lat = kotlin.math.asin(-qy.coerceIn(-1f, 1f))
+                val lon = kotlin.math.atan2(qx, qz)
+                val i = y * d + x
+                rowIdx[i] = ((0.5f - lat / PI.toFloat()) * mh).toInt().coerceIn(0, mh - 1)
+                lonIdx[i] = (lon / PI.toFloat() * 0.5f + 0.5f) * mw
+                val dot = nx * lx + ny * ly + nz * lz
+                val day = smooth(-0.10f, 0.40f, dot)
+                shade[i] = (0.03f + 0.97f * day) * (0.6f + 0.4f * sqrt(nz))
+                hazeA[i] = (1f - nz).let { it * it } * 0.55f * (0.12f + 0.88f * day)
+            }
+        }
+
+        /** Dibuja el cuadro con la rotación `ang` (radianes). */
+        fun render(ang: Float) {
+            val off = ang / (2f * PI.toFloat()) * mw
+            for (i in out.indices) {
+                val row = rowIdx[i]
+                if (row < 0) { out[i] = 0; continue }
+                var u = (lonIdx[i] + off).toInt() % mw
+                if (u < 0) u += mw
+                val c = map[row * mw + u]
+                val sh = shade[i]; val hz = hazeA[i]
+                val rr = (Color.red(c) * sh) * (1f - hz) + atr * hz
+                val gg = (Color.green(c) * sh) * (1f - hz) + atg * hz
+                val bb = (Color.blue(c) * sh) * (1f - hz) + atb * hz
+                out[i] = (255 shl 24) or (rr.toInt().coerceIn(0, 255) shl 16) or (gg.toInt().coerceIn(0, 255) shl 8) or bb.toInt().coerceIn(0, 255)
+            }
+            synchronized(bmp) { bmp.setPixels(out, 0, d, 0, 0, d, d) }
+        }
     }
 
     // ---------- texturas de eventos (con ruido, sin bordes sólidos) ----------

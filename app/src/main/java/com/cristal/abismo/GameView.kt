@@ -547,6 +547,7 @@ class GameView(ctx: Context) : View(ctx) {
                 fullRes[sel] = true
                 thumbs[sel] = Bitmap.createScaledBitmap(pd.bmp, thumbR * 2, thumbR * 2, true)
             })
+            tasks.add(1.5f to { prepareSpinner(dir, sel) })
             tasks.add(3f to {
                 ships = DiskCache.loadSprites(dir, fs, 28)
                     ?: Textures.makeShipSprites(BASE, Factions.all[fs], cp).also { t -> saveAsync { DiskCache.saveSprites(dir, fs, t) } }
@@ -620,7 +621,8 @@ class GameView(ctx: Context) : View(ctx) {
 
     /** Al equipar una superficie se muestra al instante la vista previa y se cambia a la completa cuando está lista. */
     private fun requestSkin(i: Int) {
-        if (fullRes[i] || skins[i].classified) return
+        if (skins[i].classified) return
+        if (fullRes[i]) { if (spinSkin != i) Thread { try { prepareSpinner(context.cacheDir, i) } catch (e: Throwable) { } }.start(); return }
         fullRes[i] = true
         val pr = planetRes()
         val dir = context.cacheDir
@@ -631,6 +633,7 @@ class GameView(ctx: Context) : View(ctx) {
             // la equipada se guarda en binario para que el próximo inicio sea más rápido
             if (!raw) saveAsync { DiskCache.savePlanet(dir, i, pr, pd) }
             cache[i] = pd
+            try { prepareSpinner(dir, i) } catch (e: Throwable) { }
             postInvalidate()
         }.start()
     }
@@ -671,7 +674,7 @@ class GameView(ctx: Context) : View(ctx) {
 
         // música: calmada en carga y menú, épica en partida (vuelve a la calmada tras perder)
         val shopMusic = phase == 0 && tab == 1 && subTab == 4
-        val coral = MusicThemes.all.size - 1
+        val coral = MusicThemes.all.indexOfFirst { it.name == "Épica coral" }
         music.play(if (shopMusic) 1 + previewTheme else if (phase <= 0 || (phase == 2 && g.over && g.overTime > 1.5f)) (if (themeSel == coral) 1 + coral else 0)
             else if (themeSel == coral) 1 else 1 + themeSel)
         val wantBg = if (phase == 0 && tab == 1 && subTab == 3) previewBg else bgSel
@@ -1137,9 +1140,42 @@ class GameView(ctx: Context) : View(ctx) {
 
     /** Giro del planeta: lento en el menú; se congela al explotar y queda fijo toda la partida. */
     private var planetAng = 0f
+    @Volatile private var spinner: Textures.Spinner? = null
+    @Volatile private var spinSkin = -1
+    private var spinThread: Thread? = null
+
+    /** Prepara el giro del planeta equipado (mapa de superficie en disco) y lanza el hilo que dibuja los cuadros. */
+    private fun prepareSpinner(dir: java.io.File, skin: Int) {
+        if (skins[skin].classified) { spinner = null; return }
+        val mh = 512
+        val mapBmp = cachedTex(dir, "map_$skin") { Bitmap.createBitmap(Textures.makeSurfaceMap(mh, skins[skin]), mh * 2, mh, Bitmap.Config.ARGB_8888) }
+        val px = IntArray(mh * 2 * mh)
+        mapBmp.getPixels(px, 0, mh * 2, 0, 0, mh * 2, mh)
+        val sp = Textures.Spinner(px, mh, (planetR * 1.25f).toInt().coerceIn(200, 700), skins[skin])
+        sp.render(0f)
+        spinner = sp; spinSkin = skin
+        if (spinThread == null) {
+            spinThread = Thread {
+                var ang = 0f
+                var last = System.nanoTime()
+                while (true) {
+                    try {
+                        val now = System.nanoTime()
+                        val dt = ((now - last) / 1e9f).coerceAtMost(0.2f); last = now
+                        val cur = spinner
+                        if (cur != null && phase <= 0 && !paused) {
+                            ang += dt * 0.045f  // una vuelta cada ~2 min 20 s
+                            cur.render(ang)
+                            postInvalidate()
+                        }
+                        Thread.sleep(45)
+                    } catch (e: InterruptedException) { break } catch (e: Throwable) { }
+                }
+            }.apply { isDaemon = true; start() }
+        }
+    }
 
     private fun drawPlanet(c: Canvas, g: Game) {
-        if (phase <= 0 && !paused) planetAng = (planetAng + frameDt * 2.2f) % 360f
         val si = displayedSkin()
         val pd = cache[si]
         c.save()
@@ -1151,6 +1187,14 @@ class GameView(ctx: Context) : View(ctx) {
         if (pd != null) {
             rect.set(ccx - planetR, ccy - planetR, ccx + planetR, ccy + planetR)
             c.drawBitmap(pd.bmp, null, rect, bmpPaint)
+            // en el menú la superficie gira sobre su eje vertical con la luz fija; al explotar queda la textura completa
+            val spn = spinner
+            if (spn != null && phase <= 0 && si == spinSkin) {
+                val dr = planetR * 0.93f
+                rect.set(ccx - dr, ccy - dr, ccx + dr, ccy + dr)
+                synchronized(spn.bmp) { c.drawBitmap(spn.bmp, null, rect, bmpPaint) }
+                rect.set(ccx - planetR, ccy - planetR, ccx + planetR, ccy + planetR)
+            }
             // nubes que giran despacio (dos capas en sentidos opuestos), solo sobre el disco del planeta
             val ct = cloudTex
             if (ct != null && !skins[si].classified) {

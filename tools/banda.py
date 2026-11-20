@@ -454,6 +454,109 @@ def epica_coro(lib, band):
     return m.finish(wet=0.55, rt60=5.0, bass=0.2, room=True, sat=0.85)
 
 
+def accordion(freq, dur, att=0.03, rel=0.08):
+    """Acordeón: tres lengüetas por nota (una afinada y dos desafinadas, efecto "musette"), timbre de lengüeta
+    con resonancias de caja y fuelle con leve vibración. Modelo de un instrumento acústico, sin sonido electrónico."""
+    n = int((dur + rel) * SR)
+    t = np.arange(n) / SR
+    out = np.zeros(n)
+    for cents in (0.0, 14.0, -12.0):
+        f = freq * 2 ** (cents / 1200)
+        ph = (t * f + RNG.uniform()) % 1.0
+        # lengüeta: pulso asimétrico (rico en armónicos impares y pares)
+        reed = np.where(ph < 0.32, 1.0, -0.47) + 0.3 * (2 * ph - 1)
+        out += reed
+    out /= 3
+    out = lowpass(out, 3800)
+    X = np.fft.rfft(out)
+    fr = np.fft.rfftfreq(n, 1 / SR)
+    X *= 1 + 1.2 * np.exp(-((fr - 1200) / 500) ** 2) + 0.6 * np.exp(-((fr - 2600) / 700) ** 2)
+    out = np.fft.irfft(X, n)
+    env = np.ones(n)
+    na = max(1, int(att * SR)); env[:na] = np.linspace(0, 1, na)
+    nd = int(dur * SR); env[nd:] = np.linspace(1, 0, n - nd)
+    bellows = 1 + 0.06 * np.sin(2 * np.pi * 5.5 * t)
+    return out * env * bellows / (np.max(np.abs(out)) + 1e-9) * 0.6
+
+
+def regio(lib, band):
+    """Norteño / banda a ritmo de polka (2/4 vivo): acordeón, bajo sexto (guitarra de 12 cuerdas modelada),
+    tuba en el "um" y el bajo sexto en el "pa", trompetas y trombones respondiendo. Melodía original."""
+    k = band.kit
+    bpm = 118
+    beat = 60.0 / bpm
+    bar = 4 * beat
+    m = Mix(32 * bar, tail=2.5)
+    n = len(m.L)
+    G, C, D, Em, Am = 43, 36, 38, 40, 45
+    A_ = [(G, MAJ), (G, MAJ), (D, MAJ), (D, MAJ), (D, MAJ), (D, MAJ), (G, MAJ), (G, MAJ)]
+    B_ = [(C, MAJ), (C, MAJ), (G, MAJ), (G, MAJ), (D, MAJ), (D, MAJ), (G, MAJ), (G, MAJ)]
+    prog = A_ + A_ + B_ + A_
+    sexto = np.zeros(n)
+    for b, (root, q) in enumerate(prog):
+        t0 = b * bar
+        nb = root - 12 if root > 40 else root
+        # tuba en 1 y 3, alternando tónica y quinta (el "um")
+        for bt, nn in ((0, nb), (2, nb + 7 if nb + 7 < 45 else nb - 5)):
+            m.add(t0 + bt * beat, lib.tuba.note(nn, beat * 0.7, att=0.02, rel=0.15), 0.55, pan=-0.05)
+            m.add(t0 + bt * beat, band.pizz.note(nn, beat * 0.7, att=0.003, rel=0.15), 0.25)
+        # bajo sexto en 2 y 4 (el "pa"): acorde rasgueado con cuerdas dobladas
+        tri = [root + 12, root + 12 + q, root + 19]
+        tri = [x if x < 64 else x - 12 for x in tri]
+        for bt in (1, 3):
+            for i, nn in enumerate(sorted(tri)):
+                for dbl in (0, 12):
+                    sig = oq._acoustic(nn + dbl - (12 if nn + dbl > 70 else 0), beat * 0.5) * (0.5 if dbl else 0.7)
+                    place(sexto, t0 + bt * beat + i * 0.008 + dbl * 0.0004, sig, 1.0)
+        # batería de banda: bombo en 1 y 3, tarola en 2 y 4, platillo suave
+        m.add(t0, k.get("kick", 0.75), 0.55)
+        m.add(t0 + 2 * beat, k.get("kick", 0.65), 0.5)
+        m.add(t0 + beat, k.get("snare", 0.6), 0.4, pan=0.1)
+        m.add(t0 + 3 * beat, k.get("snare", 0.65), 0.42, pan=0.1)
+        if b % 8 == 0:
+            m.add(t0, k.get("crash", 0.7), 0.35, pan=0.3)
+        for bt in (1, 3):
+            m.add(t0 + bt * beat, k.get("hh", 0.5), 0.2, pan=-0.2)
+    # melodía original: el acordeón la canta con adornos de terceras
+    mel = [(71, 0, .5), (74, .5, .5), (79, 1, 1), (78, 2, .5), (76, 2.5, .5), (74, 3, 1),
+           (71, 4, .5), (74, 4.5, .5), (78, 5, 1), (76, 6, .5), (74, 6.5, .5), (72, 7, 1),
+           (69, 8, .5), (72, 8.5, .5), (78, 9, 1), (76, 10, .5), (74, 10.5, .5), (72, 11, 1),
+           (71, 12, .5), (72, 12.5, .5), (74, 13, .5), (76, 13.5, .5), (78, 14, .5), (76, 14.5, .5), (79, 15, 1),
+           (79, 16, .5), (78, 16.5, .5), (76, 17, .5), (74, 17.5, .5), (76, 18, 1), (72, 19, 1),
+           (71, 20, .5), (72, 20.5, .5), (74, 21, 1), (78, 22, 1), (81, 23, 1),
+           (79, 24, .5), (78, 24.5, .5), (76, 25, .5), (74, 25.5, .5), (72, 26, 1), (78, 27, 1),
+           (79, 28, 2), (74, 30, .5), (78, 30.5, .5), (79, 31, 1)]
+    melB = [(76, 0, 1), (79, 1, .5), (76, 1.5, .5), (72, 2, 1), (76, 3, 1),
+            (74, 4, .5), (76, 4.5, .5), (79, 5, 1), (83, 6, 1.5), (81, 7.5, .5),
+            (81, 8, 1), (78, 9, .5), (76, 9.5, .5), (74, 10, 1), (72, 11, 1),
+            (71, 12, 1), (74, 13, 1), (79, 14, 2),
+            (76, 16, 1), (79, 17, .5), (76, 17.5, .5), (72, 18, 1), (76, 19, 1),
+            (74, 20, .5), (76, 20.5, .5), (79, 21, 1), (83, 22, 1.5), (81, 23.5, .5),
+            (81, 24, .5), (79, 24.5, .5), (78, 25, .5), (76, 25.5, .5), (74, 26, 1), (78, 27, 1),
+            (79, 28, 3)]
+    acc = np.zeros(n)
+    for base, ml in ((0, mel), (8, mel), (16, melB), (24, mel)):
+        for nn, bt, d in ml:
+            st = base * bar + bt * beat
+            place(acc, st, accordion(mm.midi(nn), d * beat * 0.92), 1.0)
+            # segunda voz en terceras (estilo norteño)
+            place(acc, st, accordion(mm.midi(nn - (3 if nn % 12 in (11, 4, 9) else 4)), d * beat * 0.92), 0.55)
+    # metales de banda: trompetas y trombones contestan al final de cada frase y doblan en el B
+    for base in (8, 24):
+        for b2 in (3, 7):
+            st = (base + b2) * bar + 2 * beat
+            for i, nn in enumerate((74, 78, 79)):
+                m.add(st + i * beat / 2, lib.tpt.note(nn, beat * 0.45, att=0.01, rel=0.15), 0.3, pan=0.25)
+                m.add(st + i * beat / 2, lib.tbn.note(nn - 12 - 5, beat * 0.45, att=0.01, rel=0.15), 0.28, pan=-0.25)
+    for nn, bt, d in melB:
+        st = 16 * bar + bt * beat
+        m.add(st, lib.tpt.note(nn, d * beat * 0.9, att=0.01, rel=0.2), 0.22, pan=0.25)
+        m.add(st, lib.tbn.note(nn - 12, d * beat * 0.9, att=0.02, rel=0.2), 0.2, pan=-0.25)
+    m.add(0, acc, 0.42, pan=0.1)
+    m.add(0, oq._body_eq(sexto), 0.3, pan=-0.35)
+    return m.finish(wet=0.18, rt60=1.3, bass=0.2, room=True, sat=0.95)
+
+
 def brighten(st, amt=0.7):
     """Presencia y aire (realce sobre 3 kHz) tras la mezcla."""
     out = st.copy()
@@ -583,6 +686,8 @@ if __name__ == "__main__":
         mm.save(brighten(neutron(lib, band), 0.8), out, "theme_neutron")
     if what in ("all", "duro"):
         mm.save(brighten(duro(lib, band), 0.8), out, "theme_duro")
+    if what in ("all", "regio"):
+        mm.save(brighten(regio(lib, band), 0.7), out, "theme_regio")
     if what in ("all", "coro"):
         mm.save(brighten(epica_coro(lib, band), 0.4), out, "theme_coro")
     print("ok")
