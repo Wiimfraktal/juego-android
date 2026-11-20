@@ -26,20 +26,30 @@ import kotlin.math.tanh
  */
 class Announcer(private val ctx: Context) {
     companion object {
-        val PHRASES = arrayOf(
+        private val BASE = arrayOf(
             "¡Línea!", "¡Doble línea!", "¡Triple línea!", "¡Devastación!",
             "¡Racha!", "¡Frenesí!", "¡Imparable!", "¡Arrasador!", "¡Intocable!", "¡Invencible!",
             "¡Detonación!", "¡Demolición!", "¡Al límite!", "¡Nuevo récord!", "¡Ascenso!",
             "¡Otra línea!", "¡Excelente!", "¡Sigue así!", "¡Brutal!",
             "¡Cinco líneas!", "¡Diez líneas!", "¡Quince líneas!", "¡Veinte líneas!", "¡Treinta líneas!", "¡Cincuenta líneas!"
         )
+        private val COUNT = arrayOf("dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez")
+        /** Racha: "¡Dos seguidas!" … "¡Diez seguidas!" (índices STREAK_BASE + racha - 2). */
+        const val STREAK_BASE = 25
+        val RANK_BASE = 25 + 9
+        val PHRASES: Array<String> = BASE +
+            Array(9) { "¡${COUNT[it].replaceFirstChar { c -> c.uppercase() }} seguidas!" } +
+            Array(Ranks.all.size) { i ->
+                val n = Ranks.all[i].name.replace(" III", " tres").replace(" II", " dos").replace(" I", " uno")
+                "¡Ascenso! ¡$n!"
+            }
         const val LINE = 0; const val DOUBLE = 1; const val TRIPLE = 2; const val DEVAST = 3
         const val SPREE = 4; const val FRENZY = 5; const val UNSTOP = 6; const val RAMPAGE = 7
         const val UNTOUCH = 8; const val INVINC = 9; const val DETON = 10; const val DEMOL = 11
         const val LIMIT = 12; const val RECORD = 13; const val PROMO = 14
         const val OTHER = 15; const val GREAT = 16; const val KEEP = 17; const val BRUTAL = 18
         val MILESTONES = mapOf(5 to 19, 10 to 20, 15 to 21, 20 to 22, 30 to 23, 50 to 24)
-        private const val VER = "v4"
+        private const val VER = "v5"
     }
 
     var enabled = true

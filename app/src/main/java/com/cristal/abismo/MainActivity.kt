@@ -25,6 +25,17 @@ class MainActivity : Activity() {
 
     private lateinit var view: GameView
 
+    private var lastBack = 0L
+
+    /** Atrás dos veces (en menos de 2 s) para salir, como en los juegos actuales. */
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        val now = System.currentTimeMillis()
+        if (now - lastBack < 2000) { @Suppress("DEPRECATION") super.onBackPressed(); return }
+        lastBack = now
+        try { android.widget.Toast.makeText(this, "Pulsa atrás otra vez para salir", android.widget.Toast.LENGTH_SHORT).show() } catch (e: Exception) { }
+    }
+
     override fun onPause() {
         super.onPause()
         view.hostPause()

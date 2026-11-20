@@ -72,7 +72,7 @@ class GameView(ctx: Context) : View(ctx) {
         const val APPROACH = 1.6f
         const val ESC0 = 1.4f
         const val EV_DUR = 26f
-        const val LAUNCH = 1.5f
+        const val LAUNCH = 0.75f
         const val ESC1 = 0.7f
         val BASE = intArrayOf(
             Color.rgb(0, 229, 255), Color.rgb(255, 196, 0), Color.rgb(176, 64, 255),
@@ -255,6 +255,7 @@ class GameView(ctx: Context) : View(ctx) {
     private var flameB: Bitmap? = null
     private var totalBars = try { prefs.getInt("tbars", 0) } catch (e: Exception) { 0 }
     private var rankStart = 0
+    private var rankSaid = 0
     private var carouselOff = 0f
     private var msg = ""
     private var msgT = 0f
@@ -349,6 +350,7 @@ class GameView(ctx: Context) : View(ctx) {
         preview = skinSel
         seenIngots = 0; seenBars = 0; dispFrac = 0f; seenLocks = 0
         rankStart = Ranks.indexFor(totalBars)
+        rankSaid = rankStart
         settingsOpen = false
         settingsAnim = 0f; pauseAnim = 0f; tabT = 1f; celebT = 0f
         newRecord = false; overHandled = false
@@ -856,7 +858,6 @@ class GameView(ctx: Context) : View(ctx) {
         stats.max("best", g.score)
         stats.max("streak", g.bestStreak)
         if (g.score > best) voice(Announcer.RECORD)
-        if (Ranks.indexFor(totalBars) > rankStart) voice(Announcer.PROMO)
         checkAch()
         if (g.score > best) {
             best = g.score
@@ -880,6 +881,9 @@ class GameView(ctx: Context) : View(ctx) {
             try { prefs.edit().putInt("tbars", totalBars).apply() } catch (e: Exception) { }
             seenBars = g.barsFilled
             barFlash = 1f
+            // ascenso de rango durante la partida: el narrador lo anuncia con su nombre
+            val ri = Ranks.indexFor(totalBars)
+            if (ri > rankSaid) { rankSaid = ri; voice(Announcer.RANK_BASE + ri) }
             celebT = CELEB
             if (music.enabled) { sfx.solo(); soloT = 4.5f }
             dispFrac = 0f
@@ -1623,11 +1627,11 @@ class GameView(ctx: Context) : View(ctx) {
 
     private fun voice(i: Int) { if (voiceQueue.size < 3) voiceQueue.add(i) }
 
-    private fun awardMedal(i: Int) {
+    private fun awardMedal(i: Int, speak: Boolean = true) {
         medalPops.add(MedalPop(i, 0f))
         if (medalPops.size > 4) medalPops.removeAt(0)
         stats.add("md_$i")
-        voice(i)
+        if (speak) voice(i)
     }
 
     private fun ownedCount() = Integer.bitCount(owned) + Integer.bitCount(shipOwned) + Integer.bitCount(bgOwned) + Integer.bitCount(themeOwned) - 4
@@ -1654,15 +1658,16 @@ class GameView(ctx: Context) : View(ctx) {
                 // la voz sigue la cuenta de líneas de la partida: hitos con número y frases variadas entre ellos
                 val total = g.lines
                 val ms = Announcer.MILESTONES[total]
+                // racha en curso ("¡Tres seguidas!") y, si no hay racha, la cuenta de líneas en hitos de 5
                 voice(when {
+                    g.streak in 2..10 -> Announcer.STREAK_BASE + g.streak - 2
                     ms != null -> ms
                     total <= 1 -> Announcer.LINE
-                    g.streak >= 3 -> Announcer.BRUTAL
                     else -> intArrayOf(Announcer.OTHER, Announcer.GREAT, Announcer.KEEP, Announcer.LINE)[total % 4]
                 })
             }
             val si = when (g.streak) { 3 -> 4; 5 -> 5; 8 -> 6; 12 -> 7; 16 -> 8; 20 -> 9; else -> -1 }
-            if (si >= 0) awardMedal(si)
+            if (si >= 0) awardMedal(si, speak = false)
             if (alert > 0.55f) { awardMedal(12); stats.add("limit") }
         }
         val hadEvents = g.clearEvents.isNotEmpty() || g.bombEvents.isNotEmpty()
@@ -1977,11 +1982,11 @@ class GameView(ctx: Context) : View(ctx) {
         val k = (evT / 0.3f).coerceIn(0f, 1f) * ((3.8f - evT) / 0.4f).coerceIn(0f, 1f)
         val glitch = (time * 6.3f) % 1f < 0.07f || evT < 0.45f && Random.nextFloat() < 0.35f
         val jx = if (glitch) (Random.nextFloat() - 0.5f) * u * 0.35f else 0f
-        val y = barY1 + u * 1.5f
+        val y = height * 0.5f
         val x = width / 2f + jx
         val hw = u * 5f; val hh = u * 0.75f
         rect.set(x - hw, y - hh, x + hw, y + hh)
-        val al = (255 * k * (if (glitch) 0.7f else 1f)).toInt()
+        val al = (165 * k * (if (glitch) 0.7f else 1f)).toInt()
         val pb = plateBmp
         if (pb != null) { objPaint.alpha = al; c.drawBitmap(pb, null, rect, objPaint); objPaint.alpha = 255 }
         else { paint.style = Paint.Style.FILL; paint.color = Color.argb(al * 230 / 255, 28, 28, 30); c.drawRect(rect, paint) }
