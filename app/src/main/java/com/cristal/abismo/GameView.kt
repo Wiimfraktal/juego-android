@@ -78,18 +78,19 @@ class GameView(ctx: Context) : View(ctx) {
     private val skins = Skins.all
     private val factions = Factions.all
     private val tips = arrayOf(
-        "Arrastra la nave en círculo para rodearla alrededor del centro y colocarla donde quieras.",
-        "Completa una línea para destruir las naves enteras que la forman.",
-        "El hierro de cada nave llena la barra; al llenarla ganas lingotes.",
-        "Las naves son lentas al aparecer: aprovecha para ubicarlas con calma.",
-        "Un empujón rápido hacia afuera lanza la nave de golpe.",
-        "Toca la pantalla para girar la nave antes de colocarla.",
-        "El contorno de color muestra la celda exacta donde quedará la nave.",
+        "Cada nave aparece junto a la línea central y viaja hacia arriba o hacia abajo, al azar.",
+        "Arrastra la nave en cualquiera de las 8 direcciones; siempre encaja en la cuadrícula.",
+        "Una nave nunca puede regresar hacia el centro: solo avanzar o moverse a los lados.",
+        "Toca la pantalla para girar la nave antes de que se coloque.",
+        "Desliza rápido en la dirección en que viaja la nave para lanzarla de golpe.",
+        "Completa una fila o columna y las naves que la tocan explotan; las demás se recorren hacia afuera.",
+        "Las naves bomba parpadean en rojo: al colocarse destruyen todo lo que tengan cerca.",
+        "Las rachas de líneas seguidas dan medallas y las anuncia la voz del comandante.",
+        "El hierro de cada nave llena la barra; al completarla ganas lingotes.",
         "Si los bordes parpadean en rojo, las naves están demasiado cerca del centro.",
-        "Las naves no pueden acercarse al centro: solo alejarse o moverse a su alrededor.",
-        "Gasta tus lingotes en skins de planeta desde la pestaña Personalizar.",
-        "Mientras el juego está en pausa no se ve el tablero.",
-        "Puedes desactivar la música y los efectos desde el engrane del menú.",
+        "Las alertas de partida (meteoros, eclipses, tormentas) son solo visuales: no afectan el juego.",
+        "En Personalizar compras superficies, naves, fondos y música, y diseñas tu emblema.",
+        "En Perfil ves tus estadísticas, medallas y logros, y puedes cambiar tu nombre de piloto.",
         "Mantén libre la zona central: es lo que decide la partida.",
         "Cada nivel aumenta un poco la velocidad de las naves."
     )

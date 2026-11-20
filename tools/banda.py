@@ -197,6 +197,13 @@ def highpass(x, fc):
     return np.fft.irfft(X * np.sqrt(r / (1 + r)), len(x))
 
 
+def dip(x, fc, db, q=1.2):
+    X = np.fft.rfft(x)
+    f = np.fft.rfftfreq(len(x), 1 / SR)
+    g = 1 + (10 ** (db / 20) - 1) * np.exp(-((f - fc) / (fc / q)) ** 2)
+    return np.fft.irfft(X * g, len(x))
+
+
 def place(buf, t, sig, g=1.0):
     i = int(t * SR)
     if i >= len(buf):
@@ -308,71 +315,72 @@ def game_rock(lib, band):
         m.add(bt * beat, lib.piano.note(n, 2 * beat, att=0.002, rel=1.2), 0.25, pan=0.3)
     m.add(16 * bar - 2 * beat, oq.riser(lib, 2 * beat), 0.25)
     # amplificadores
-    m.add(0, mm.amp(highpass(gl, 110), drive=7.5, cut=5200), 0.16, pan=-0.8)
-    m.add(0, mm.amp(highpass(gr, 110), drive=7.5, cut=5200), 0.16, pan=0.8)
+    m.add(0, dip(mm.amp(highpass(gl, 110), drive=7.5, cut=5200), 400, -5), 0.16, pan=-0.8)
+    m.add(0, dip(mm.amp(highpass(gr, 110), drive=7.5, cut=5200), 400, -5), 0.16, pan=0.8)
     m.add(0, mm.amp(lead, drive=10.0, cut=5600), 0.27, pan=0.1)
     m.add(0, np.tanh(lowpass(bass, 1800) * 2.0) * 0.6, 0.8)
     m.add(0, drums, 1.15)
-    return m.finish(wet=0.22, rt60=1.8, bass=0.15)
+    return m.finish(wet=0.24, rt60=1.8, bass=0.15, room=True, sat=0.95)
 
 
 # ------------------------------------------------------------------ Neutron: folk-pop alegre y nostálgico (todo grabado)
 def neutron(lib, band):
+    """Folk-pop alegre con piano vertical real al frente: mano izquierda saltarina y melodía en la derecha."""
     k = band.kit
     bpm = 104
     beat = 60.0 / bpm
     bar = 4 * beat
-    sw = 0.64  # corcheas con swing
-    eighth = lambda i: (i // 2) * beat + (i % 2) * sw * beat
+    sw = 0.63
+    swt = lambda bt: bt + (sw - 0.5) if abs(bt % 1 - 0.5) < 1e-6 else bt
+    hum = lambda: RNG.uniform(-0.007, 0.007)
     m = Mix(32 * bar, tail=3.0)
     G, D, Em, C, Bm, Am, E, A = 43, 38, 40, 36, 35, 45, 40, 45
     A_ = [(G, MAJ), (D, MAJ), (Em, MIN), (C, MAJ), (G, MAJ), (E, MAJ), (A, MAJ), (D, MAJ)]
     B_ = [(C, MAJ), (D, MAJ), (Bm, MIN), (Em, MIN), (Am, MIN), (D, MAJ), (G, MAJ), (D, MAJ)]
     prog = A_ + A_ + B_ + A_
-    voic = {(G, MAJ): [43, 47, 50, 55, 59, 67], (D, MAJ): [50, 57, 62, 66], (Em, MIN): [40, 47, 52, 55, 59, 64],
-            (C, MAJ): [48, 52, 55, 60, 64], (Bm, MIN): [47, 54, 59, 62, 66], (Am, MIN): [45, 52, 57, 60, 64],
-            (E, MAJ): [40, 47, 52, 56, 59, 64], (A, MAJ): [45, 52, 57, 61, 64]}
-    gl = np.zeros(len(m.L)); gr = np.zeros(len(m.L)); drums = np.zeros(len(m.L))
+    pn = lib.piano
+    drums = np.zeros(len(m.L))
+
+    def pno(t, n, d, g, pan=0.15):
+        m.add(t + hum(), pn.note(n, d, att=0.002, rel=0.9), g * RNG.uniform(0.88, 1.08), pan=pan)
+
     for b, (root, q) in enumerate(prog):
         t0 = b * bar
         sec = b // 8
-        notes = voic[(root, q)]
-        # rasgueo con swing: abajo en tiempos, arriba en contratiempos
-        for i in range(8):
-            if sec == 0 and i % 2 == 1 and i != 3:
-                continue
-            up = i % 2 == 1
-            ns = notes[-4:] if up else notes
-            g = (0.5 if up else 0.8) * (0.75 if sec == 0 else 1.0)
-            chord_gtr(band.gretsch_p if up else band.gretsch, gl, t0 + eighth(i), ns, beat * 0.9, g, strum=0.011, up=up)
-            chord_gtr(band.gretsch_p if up else band.gretsch, gr, t0 + eighth(i) + 0.014, ns, beat * 0.9, g * 0.9, strum=0.012, up=up)
-        # contrabajo pizzicato: tónica y quinta con paso cromático
-        nxt = prog[(b + 1) % len(prog)][0]
-        rb = root - 12 if root >= 40 else root
-        nb = nxt - 12 if nxt >= 40 else nxt
-        for bt, n in ((0, rb), (1, rb + 7), (2, rb + 12 if rb + 12 < 52 else rb), (3, nb - 1 if nb > rb else nb + 1)):
-            m.add(t0 + bt * beat, band.pizz.note(n, beat * 0.8, att=0.003, rel=0.2), 0.5)
-        # piano saltarín (estilo honky-tonk suave)
-        tri = triad(root, q)
+        lo = root - 12 if root >= 41 else root  # bajo del piano (octava 2)
+        chord = [root + 12, root + 12 + q, root + 19]  # acorde cerrado en el centro del teclado
+        chord = [n if n < 64 else n - 12 for n in chord]
+        # mano izquierda: bajo en 1 y 3, acorde en 2 y 4 (con un empujón en el "y" del 4)
+        pno(t0, lo, beat * 0.9, 0.34, pan=-0.2)
+        pno(t0 + 2 * beat, lo + 7 if lo + 7 < 50 else lo - 5, beat * 0.9, 0.3, pan=-0.2)
         for bt in (1, 3):
-            for n in tri:
-                m.add(t0 + bt * beat, lib.piano.note(n + 24, beat * 0.5, att=0.002, rel=0.3), 0.09, pan=0.25)
-        # batería con escobillas
+            for n in chord:
+                pno(t0 + bt * beat, n, beat * 0.45, 0.15, pan=0.0)
+        if sec >= 1:
+            for n in chord:
+                pno(t0 + swt(3.5) * beat, n, beat * 0.3, 0.09, pan=0.0)
+        # contrabajo pizzicato real desde la segunda sección
+        if sec >= 1:
+            nxt = prog[(b + 1) % len(prog)][0]
+            rb = root - 12 if root >= 40 else root
+            nb = nxt - 12 if nxt >= 40 else nxt
+            for bt, n in ((0, rb), (2, rb + 7 if rb + 7 < 50 else rb - 5), (3, nb - 1 if nb > rb else nb + 1)):
+                m.add(t0 + bt * beat + hum(), band.pizz.note(n, beat * 0.8, att=0.003, rel=0.2), 0.42, pan=-0.05)
+        # escobillas suaves
         if sec >= 1:
             for i in range(8):
-                place(drums, t0 + eighth(i), k.get("hhb", 0.45 + 0.3 * (i % 2 == 0)), 0.5)
-            place(drums, t0, k.get("kick", 0.6), 0.75)
-            place(drums, t0 + 2 * beat, k.get("kick", 0.5), 0.6)
-            place(drums, t0 + beat, k.get("brush", 0.8), 0.8)
-            place(drums, t0 + 3 * beat, k.get("brush", 0.9), 0.85)
-        else:
-            place(drums, t0 + beat, k.get("side", 0.5), 0.5)
-            place(drums, t0 + 3 * beat, k.get("side", 0.5), 0.5)
-        if b in (8, 16, 24):
-            place(drums, t0, k.get("crash", 0.5), 0.45)
-        if sec >= 1:
+                place(drums, t0 + swt(i / 2) * beat + hum(), k.get("hhb", 0.35 + 0.25 * (i % 2 == 0)), 0.38)
+            place(drums, t0 + beat, k.get("brush", 0.7), 0.6)
+            place(drums, t0 + 3 * beat, k.get("brush", 0.8), 0.65)
+            place(drums, t0, k.get("kick", 0.4), 0.5)
+        if b in (16, 24):
+            place(drums, t0, k.get("ride", 0.5), 0.35)
+        # cuerdas cálidas en B y en el final
+        if sec >= 2:
+            tri = triad(root, q)
             for i, n in enumerate(tri):
-                m.add(t0, lib.vla.note(n + 24 if n + 24 < 70 else n + 12, bar + 0.3, att=0.4, rel=0.8), 0.08, pan=0.35 - 0.15 * i)
+                m.add(t0, lib.vla.note(n + 24 if n + 24 < 70 else n + 12, bar + 0.3, att=0.5, rel=0.9), 0.07, pan=0.35 - 0.15 * i)
+            m.add(t0, lib.vc.note(root + 12 if root + 12 < 55 else root, bar + 0.3, att=0.5, rel=0.9), 0.1, pan=-0.3)
     melA = [(71, 0, 1), (74, 1, 1), (71, 2, .5), (69, 2.5, .5), (67, 3, 1),
             (69, 4, 1.5), (66, 5.5, .5), (69, 6, 1), (74, 7, 1),
             (67, 8, 1), (71, 9, 1), (76, 10, 1.5), (74, 11.5, .5),
@@ -389,36 +397,33 @@ def neutron(lib, band):
             (78, 20, 1), (76, 21, 1), (74, 22, 1), (69, 23, 1),
             (71, 24, 1), (74, 25, 1), (79, 26, 2),
             (78, 28, 3)]
-    sw_t = lambda bt: bt + (sw - 0.5) if bt % 1 == 0.5 else bt
-    lead = np.zeros(len(m.L))
-    for n, bt, d in melA:  # guitarra limpia canta la melodía
-        place(lead, sw_t(bt) * beat, band.gretsch.note(n, d * beat + 0.1, att=0.002, rel=0.3), 1.0)
-    for n, bt, d in melA:  # piano y violines
-        st = 8 * bar + sw_t(bt) * beat
-        m.add(st, lib.piano.note(n + 12, d * beat, att=0.002, rel=0.9), 0.24, pan=0.05)
-        m.add(st, lib.vln.note(n, d * beat + 0.15, att=0.08, rel=0.5), 0.12, pan=-0.2)
-    for n, bt, d in melB:
-        st = 16 * bar + sw_t(bt) * beat
-        m.add(st, lib.hn.note(n - 12, d * beat + 0.15, att=0.08, rel=0.5), 0.3, pan=0.05)
-        m.add(st, lib.vln.note(n, d * beat + 0.15, att=0.1, rel=0.5), 0.14, pan=-0.2)
-    for n, bt, d in melA:
-        st = 24 * bar + sw_t(bt) * beat
-        place(lead, st, band.gretsch.note(n, d * beat + 0.1, att=0.002, rel=0.3), 0.9)
-        m.add(st, lib.vln.note(n + 12, d * beat + 0.15, att=0.08, rel=0.5), 0.16, pan=-0.15)
-    m.add(0, mm.amp(gl, drive=1.4, cut=6500), 0.26, pan=-0.6)
-    m.add(0, mm.amp(gr, drive=1.4, cut=6500), 0.26, pan=0.6)
-    m.add(0, mm.amp(lead, drive=1.8, cut=6000), 0.32, pan=0.1)
-    m.add(0, drums, 0.6)
-    return m.finish(wet=0.28, rt60=1.8, bass=0.2)
+    for base, mel in ((0, melA), (8, melA), (16, melB), (24, melA)):
+        for n, bt, d in mel:
+            st = base * bar + swt(bt) * beat
+            g = 0.36 if base != 0 else 0.33
+            pno(st, n + 12, d * beat, g, pan=0.25)
+            if base >= 8 and d >= 1:  # en las repeticiones la mano derecha dobla en tercera abajo
+                pno(st, n + 12 - (3 if (n % 12) in (11, 4, 9) else 4), d * beat, g * 0.45, pan=0.25)
+            if base == 16:
+                m.add(st, lib.hn.note(n - 12, d * beat + 0.15, att=0.08, rel=0.5), 0.2, pan=-0.1)
+            if base == 24:
+                m.add(st, lib.vln.note(n, d * beat + 0.15, att=0.1, rel=0.5), 0.12, pan=-0.25)
+    m.add(0, drums, 0.55)
+    return m.finish(wet=0.3, rt60=1.6, bass=0.15, room=True, sat=0.9)
 
 
-# ------------------------------------------------------------------ Duro: french house (aquí sí hay sintetizador)
 def brighten(st, amt=0.7):
     """Presencia y aire (realce sobre 3 kHz) tras la mezcla."""
     out = st.copy()
     for c in range(2):
         out[:, c] += highpass(st[:, c], 3000) * amt
-    return out * (0.89 / np.max(np.abs(out)))
+    out = out * (0.89 / np.max(np.abs(out)))
+    # nivel parejo con los otros temas: limitador suave hasta ~0.15 RMS
+    g = 0.15 / max(1e-6, np.sqrt(np.mean(out ** 2)))
+    if g > 1:
+        out = np.tanh(out * g * 1.1) / np.tanh(1.1)
+        out *= 0.89 / np.max(np.abs(out))
+    return out
 
 
 def saw(freq, dur, voices=3, det=12, fc=2600.0):
@@ -434,81 +439,79 @@ def saw(freq, dur, voices=3, det=12, fc=2600.0):
 
 
 def duro(lib, band):
+    """French house con empuje punk: bucle de acordes filtrado, guitarras de quinta en corcheas y batería real acelerada."""
     k = band.kit
-    bpm = 123
+    bpm = 128
     beat = 60.0 / bpm
     bar = 4 * beat
     m = Mix(32 * bar, tail=2.0)
     n = len(m.L)
-    # bucle de acordes tipo muestra de disco: metales cortos + cuerdas + guitarra funk, en un compás
     chords = [[50, 53, 57, 60, 64], [43, 53, 57, 59, 64], [48, 52, 55, 59, 62], [45, 52, 55, 60, 64]]  # Dm9 G13 Cmaj9 Am7
+    roots = [38, 31, 36, 33]
     loop = np.zeros(int(2 * bar * SR) + SR)
-    stabs = [0, 1.5, 2.5, 3.5]
     for ci, ch in enumerate(chords):
         tb = ci * beat * 2
-        for j, st in enumerate((0.0, 0.75, 1.5)):
+        for st in (0.0, 0.75, 1.5):
             for nn in ch[1:]:
                 place(loop, tb + st * beat, lib.hn_st.note(nn, 0.28, att=0.003, rel=0.12), 0.35)
                 place(loop, tb + st * beat, lib.vln_sp.note(nn + 12, 0.25, att=0.003, rel=0.1), 0.25)
-            for nn in ch[2:]:
-                place(loop, tb + st * beat + 0.005, band.gretsch_p.note(nn, 0.18, att=0.002, rel=0.05), 0.35)
-    loop = loop[: int(2 * bar * SR)]
-    # lo-fi: un poco de saturación y recorte de agudos como un sampler viejo
-    loop = np.tanh(lowpass(loop, 6000) * 2.2) * 0.5
-    reps = int(np.ceil(n / len(loop)))
-    chord_bed = np.tile(loop, reps)[:n]
-    dark = lowpass(chord_bed, 380)
-    bright = chord_bed
+    loop = np.tanh(lowpass(loop[: int(2 * bar * SR)], 6500) * 1.8) * 0.5
+    bed = np.tile(loop, int(np.ceil(n / len(loop))))[:n]
     t = np.arange(n) / SR
-    bars_t = t / bar
-    # apertura del filtro por secciones: intro abre, drop abierto, breakdown cierra, subida abre
-    openv = np.interp(bars_t, [0, 8, 8.01, 16, 18, 20, 24, 24.01, 32], [0.0, 0.95, 1, 1, 0.15, 0.1, 0.95, 1, 1])
-    bed = dark * (1 - openv) + bright * openv
-    # bombeo de compresión lateral por el bombo
+    bt_ = t / bar
+    openv = np.interp(bt_, [0, 8, 8.01, 16, 18, 20, 24, 24.01, 32], [0.0, 0.95, 1, 1, 0.15, 0.1, 0.95, 1, 1])
+    bed = lowpass(bed, 400) * (1 - openv) + bed * openv
     ph = (t / beat) % 1.0
-    pump = 0.35 + 0.65 * np.clip(ph / 0.45, 0, 1) ** 0.7
-    m.add(0, bed * pump, 0.95, pan=0.0)
-    drums = np.zeros(n); synth = np.zeros(n)
-    kick_sub = np.sin(2 * np.pi * np.cumsum(45 + 90 * np.exp(-np.arange(int(0.3 * SR)) / SR / 0.04)) / SR) * \
-        np.exp(-np.arange(int(0.3 * SR)) / SR / 0.12)
-    clap = mm.shaker(0.18) * 1.2
-    bassline = [0, 0, 12, 0, 10, 0, 12, 7]
-    roots = [38, 31, 36, 33]
+    pump = 0.4 + 0.6 * np.clip(ph / 0.4, 0, 1) ** 0.7
+    m.add(0, bed * pump, 0.7)
+    drums = np.zeros(n); synth = np.zeros(n); gl = np.zeros(n); gr = np.zeros(n)
+    clap = mm.shaker(0.16)
     for b in range(32):
         t0 = b * bar
-        breakdown = 16 <= b < 20
+        brk = 16 <= b < 20
         build = 20 <= b < 24
-        if not breakdown:
-            for bt in range(4):
-                place(drums, t0 + bt * beat, k.get("kick", 1.0), 0.8)
-                place(drums, t0 + bt * beat, kick_sub, 0.28)
-        if b >= 8 and not breakdown:
-            for bt in (1, 3):
-                place(drums, t0 + bt * beat, clap, 0.35)
-                place(drums, t0 + bt * beat, k.get("rim", 0.7), 0.4)
-            for bt in range(4):
-                place(drums, t0 + bt * beat + beat / 2, k.get("ho", 0.6), 0.32)
-                place(drums, t0 + bt * beat, k.get("hh", 0.4), 0.22)
-        if build:
-            sub = 4 if b < 22 else 8
-            for kk in range(sub):
-                place(drums, t0 + kk * bar / sub, k.get("snare", 0.4 + 0.6 * (b - 20) / 4), 0.45)
-        if b in (8, 24):
-            place(drums, t0, k.get("crash", 1.0), 0.6)
-        # bajo sintetizado funk (octavas)
-        if b >= 4 and not breakdown:
+        drop = 8 <= b < 16 or b >= 24
+        ri = (b % 2) * 2
+        if not brk:
+            for x in range(4):
+                place(drums, t0 + x * beat, k.get("kick", 1.0), 0.95)
+        if drop:
+            # punk: caja en 2 y 4 con fantasmas, platillo abierto en cada corchea
+            for x in (1, 3):
+                place(drums, t0 + x * beat, k.get("snare", 1.0), 0.75)
+                place(drums, t0 + x * beat, clap, 0.25)
+            for x in range(8):
+                place(drums, t0 + x * beat / 2, k.get("ho" if x % 2 else "hh", 0.55 + 0.3 * (x % 2)), 0.3)
+            place(drums, t0 + 1.75 * beat, k.get("snare", 0.3), 0.3)
+            if b % 4 == 3:
+                for x, tom in enumerate(["t1", "t1", "t2", "t2", "t3", "t3", "snare", "snare"]):
+                    place(drums, t0 + 2 * beat + x * beat / 4, k.get(tom, 0.85, 0.8), 0.75)
+            # guitarras de quinta en corcheas, dobladas
             for half in range(2):
-                rr = roots[(b % 2) * 2 + half]
-                for kk in range(8):
-                    if kk % 4 == 3 and half == 1:
-                        continue
-                    st = t0 + half * 2 * beat + kk * beat / 4
-                    if kk % 2 == 1 and kk not in (3, 7):
-                        continue
-                    f = mm.midi(rr - 12 + bassline[kk])
-                    sig = saw(f, beat * 0.22, voices=2, det=6, fc=900) * np.exp(-np.arange(int(beat * 0.22 * SR)) / SR / 0.12)
-                    place(synth, st, sig, 0.5)
-    # lead sintetizado con formantes (sonido "robótico" cantado, sin letra)
+                r = roots[ri + half] + 12
+                r = r if r >= 40 else r + 12
+                for x in range(4):
+                    st = t0 + half * 2 * beat + x * beat / 2
+                    chord_gtr(band.egtr_m if x % 2 else band.egtr, gl, st, [r, r + 7, r + 12], beat * 0.4, 0.8)
+                    chord_gtr(band.egtr_m if x % 2 else band.egtr, gr, st + 0.012, [r, r + 7, r + 12], beat * 0.4, 0.8)
+        elif not brk:
+            for x in range(4):
+                place(drums, t0 + x * beat + beat / 2, k.get("ho", 0.5), 0.25)
+        if build:
+            sub = 8 if b < 22 else 16
+            for x in range(sub):
+                place(drums, t0 + x * bar / sub, k.get("snare", 0.35 + 0.65 * ((b - 20) * sub + x) / (4 * sub)), 0.5)
+        if b in (8, 12, 24, 28):
+            place(drums, t0, k.get("crash", 1.0), 0.7)
+        # bajo sintetizado en corcheas constantes (octava en el contratiempo)
+        if b >= 4 and not brk:
+            for half in range(2):
+                rr = roots[ri + half]
+                for x in range(4):
+                    f = mm.midi(rr - 12 + (12 if x % 2 else 0))
+                    ln = beat * 0.42
+                    sig = saw(f, ln, voices=2, det=6, fc=1100) * np.exp(-np.arange(int(ln * SR)) / SR / 0.15)
+                    place(synth, t0 + half * 2 * beat + x * beat / 2, sig, 0.5)
     mel = [(69, 0, 1.5), (72, 1.5, 0.5), (74, 2, 1), (72, 3, 0.5), (69, 3.5, 0.5),
            (67, 4, 1.5), (69, 5.5, 0.5), (71, 6, 1), (67, 7, 1),
            (72, 8, 1.5), (74, 9.5, 0.5), (76, 10, 1), (74, 11, 0.5), (72, 11.5, 0.5),
@@ -518,11 +521,13 @@ def duro(lib, band):
         for nn, bt, d in mel:
             vow = mm.AH if (bt % 4) < 2 else mm.OH
             sig = mm.voice(mm.midi(nn), d * beat + 0.05, vow, a=0.01, r=0.08, ens=2, depth=0.0, nh=40, tilt=0.6)
-            place(lead, base * bar + bt * beat, np.tanh(sig * 2.5), 0.55)
-    m.add(0, lead, 0.42, pan=0.1)
-    m.add(0, np.tanh(synth * 1.8), 0.4)
-    m.add(0, drums, 0.85)
-    return m.finish(wet=0.14, rt60=1.2, bass=0.3)
+            place(lead, base * bar + bt * beat, np.tanh(sig * 2.0), 0.5)
+    m.add(0, lead, 0.36, pan=0.1)
+    m.add(0, np.tanh(synth * 1.6), 0.38)
+    m.add(0, mm.amp(highpass(gl, 120), drive=8.0, cut=5000), 0.13, pan=-0.75)
+    m.add(0, mm.amp(highpass(gr, 120), drive=8.0, cut=5000), 0.13, pan=0.75)
+    m.add(0, drums, 0.9)
+    return m.finish(wet=0.14, rt60=1.1, bass=0.25, room=True, sat=1.0)
 
 
 if __name__ == "__main__":

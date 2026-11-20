@@ -258,17 +258,30 @@ class Mix:
         self.L[i:i + len(sig)] += sig * gl
         self.R[i:i + len(sig)] += sig * gr
 
-    def finish(self, wet=0.38, rt60=3.4, peak=0.89, bass=0.9, loop=True):
+    def finish(self, wet=0.38, rt60=3.4, peak=0.89, bass=0.9, loop=True, room=False, sat=1.25):
         n = len(self.L)
         ir_len = int(rt60 * SR)
         t = np.arange(ir_len) / SR
         env = np.exp(-6.9 * t / rt60)
         irs = []
         for _ in range(2):
-            ir = RNG.normal(0, 1, ir_len) * env
-            ir = np.cumsum(ir) * 0.02  # suaviza: reverb oscura
-            ir -= np.convolve(ir, np.ones(4000) / 4000, mode="same") * 0.9
-            ir /= np.sqrt(np.sum(ir ** 2))
+            if room:
+                # sala natural: reflexiones tempranas discretas + cola difusa que se oscurece con el tiempo
+                noise = RNG.normal(0, 1, ir_len)
+                F = np.fft.rfft(noise)
+                fr0 = np.fft.rfftfreq(ir_len, 1 / SR)
+                bright = np.fft.irfft(F / np.sqrt(1 + (fr0 / 7000) ** 4), ir_len)
+                dark = np.fft.irfft(F / np.sqrt(1 + (fr0 / 1800) ** 4), ir_len)
+                k = np.clip(t / (rt60 * 0.5), 0, 1)
+                ir = (bright * (1 - k) + dark * k) * env * np.clip(t / 0.02, 0, 1)
+                for d, g in ((0.007, 0.9), (0.013, 0.7), (0.019, -0.6), (0.026, 0.5), (0.034, -0.4), (0.043, 0.3)):
+                    ir[int(d * SR * RNG.uniform(0.9, 1.1))] += g * 6
+                ir /= np.sqrt(np.sum(ir ** 2))
+            else:
+                ir = RNG.normal(0, 1, ir_len) * env
+                ir = np.cumsum(ir) * 0.02  # suaviza: reverb oscura
+                ir -= np.convolve(ir, np.ones(4000) / 4000, mode="same") * 0.9
+                ir /= np.sqrt(np.sum(ir ** 2))
             irs.append(ir)
         size = 1 << int(np.ceil(np.log2(n + ir_len)))
         outs = []
@@ -292,7 +305,7 @@ class Mix:
                 ch[:len(tail)] += tail
             L, R = L[:main], R[:main]
         m = max(np.max(np.abs(L)), np.max(np.abs(R)))
-        L, R = np.tanh(L / m * 1.25) / np.tanh(1.25), np.tanh(R / m * 1.25) / np.tanh(1.25)
+        L, R = np.tanh(L / m * sat) / np.tanh(sat), np.tanh(R / m * sat) / np.tanh(sat)
         L, R = L * peak, R * peak
         return np.stack([L, R], axis=1)
 
