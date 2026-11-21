@@ -185,11 +185,6 @@ class GameView(ctx: Context) : View(ctx) {
     private val sfxSw = RectF()
     private val closeRect = RectF()
     private var settingsOpen = false
-    /** Cuadros por segundo: 0 = 120, 1 = 60, 2 = ahorro (30). */
-    private var fpsMode = try { prefs.getInt("fps", 1).coerceIn(0, 2) } catch (e: Exception) { 1 }
-    /** Gráficos: 0 = calidad (texturas más nítidas y todos los efectos), 1 = rendimiento. */
-    private var gfxMode = try { prefs.getInt("gfx", 0).coerceIn(0, 1) } catch (e: Exception) { 0 }
-    private val gfxAtStart = gfxMode
     private val fpsRect = Array(3) { RectF() }
     private val gfxRect = Array(2) { RectF() }
     private var framePosted = false
@@ -246,6 +241,11 @@ class GameView(ctx: Context) : View(ctx) {
     private var flashWhite = 0f
 
     private val prefs = ctx.getSharedPreferences("abismo", Context.MODE_PRIVATE)
+    /** Cuadros por segundo: 0 = 120, 1 = 60, 2 = ahorro (30). */
+    private var fpsMode = try { prefs.getInt("fps", 1).coerceIn(0, 2) } catch (e: Exception) { 1 }
+    /** Gráficos: 0 = calidad (texturas más nítidas y todos los efectos), 1 = rendimiento. */
+    private var gfxMode = try { prefs.getInt("gfx", 0).coerceIn(0, 1) } catch (e: Exception) { 0 }
+    private val gfxAtStart = gfxMode
     private val sfx = Sfx(ctx).also { it.enabled = try { prefs.getBoolean("sfx", true) } catch (e: Exception) { true } }
     private var seenLocks = 0
     private val announcer = Announcer(ctx).also { it.enabled = try { prefs.getBoolean("voice", true) } catch (e: Exception) { true } }
