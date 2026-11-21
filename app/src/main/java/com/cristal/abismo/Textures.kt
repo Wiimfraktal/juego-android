@@ -360,6 +360,39 @@ object Textures {
     }
 
     /** Galaxia espiral procedural (núcleo cálido, brazos azulados con nubes rosadas). */
+    /** Galaxia detallada para el viaje de carga: bulbo cálido, brazos con polvo oscuro, nudos rosados y estrellas sueltas. */
+    fun makeTravelGalaxy(sz: Int): Bitmap {
+        val px = IntArray(sz * sz)
+        val h = sz / 2f
+        val rnd = Random(5)
+        for (y in 0 until sz) for (x in 0 until sz) {
+            val nx = (x + 0.5f - h) / h
+            val ny = (y + 0.5f - h) / h
+            val r = sqrt(nx * nx + ny * ny)
+            if (r >= 1f) continue
+            val a = kotlin.math.atan2(ny, nx)
+            val phi = a - kotlin.math.ln(r + 0.04f) * 2.8f
+            val arm = ((0.5f + 0.5f * cos(2f * phi)).pow(2.4f))
+            val n = Noise.fbm(nx * 5f + 3f, ny * 5f, 1.5f, 5)
+            val fine = Noise.fbm(nx * 18f, ny * 18f, 4.2f, 3)
+            val bulge = kotlin.math.exp(-r * r * 60f)
+            val core = kotlin.math.exp(-r * 7f)
+            val disk = kotlin.math.exp(-r * 2.4f)
+            // polvo: bandas oscuras en el borde interior de cada brazo
+            val lane = (0.5f + 0.5f * cos(2f * phi - 0.55f)).pow(6f) * smooth(0.45f, 0.75f, n) * smooth(0.08f, 0.2f, r)
+            val armB = arm * disk * (0.35f + 0.9f * n) * (0.8f + 0.4f * fine) * (1f - 0.8f * lane)
+            val pink = smooth(0.66f, 0.78f, fine * 0.5f + n * 0.5f) * arm * disk
+            val star = if (rnd.nextFloat() < 0.012f * (arm * disk + 0.1f)) rnd.nextFloat() else 0f
+            val rr = 255f * (core * 1.0f + bulge * 0.5f + armB * 0.6f + pink * 0.85f + star)
+            val gg = 255f * (core * 0.85f + bulge * 0.45f + armB * 0.72f + pink * 0.3f + star)
+            val bb = 255f * (core * 0.62f + bulge * 0.25f + armB * 1.0f + pink * 0.55f + star)
+            val br = (core * 1.5f + bulge + armB * 0.95f + pink * 0.5f + star).coerceIn(0f, 1.6f) * (1f - 0.6f * lane * (1f - core))
+            val al = (br * 0.9f).coerceIn(0f, 1f) * smooth(1f, 0.82f, r)
+            px[y * sz + x] = Color.argb(cl(255f * al), cl(rr), cl(gg), cl(bb))
+        }
+        return Bitmap.createBitmap(px, sz, sz, Bitmap.Config.ARGB_8888)
+    }
+
     fun makeGalaxy(sz: Int): Bitmap {
         val px = IntArray(sz * sz)
         val h = sz / 2f

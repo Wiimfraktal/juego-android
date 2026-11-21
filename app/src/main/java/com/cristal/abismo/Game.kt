@@ -173,7 +173,7 @@ class Game(val cols: Int, val rows: Int) {
         if (piece == null || over) return
         accX += dx
         accY += dy
-        val step = 0.55f
+        val step = 0.42f
         var guard = 0
         while ((abs(accX) >= step || abs(accY) >= step) && guard++ < 12) {
             val sx = if (abs(accX) >= step) (if (accX > 0f) 1 else -1) else 0

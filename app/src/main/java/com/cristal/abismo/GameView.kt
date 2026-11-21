@@ -2388,18 +2388,35 @@ class GameView(ctx: Context) : View(ctx) {
         paint.shader = null
         paint.color = Color.argb((255 * al * (1f - arrive * 0.85f)).toInt(), 2, 3, 10)
         c.drawRect(0f, 0f, w, h, paint)
-        if (travelGalaxy == null) travelGalaxy = galaxyBmp ?: try { Textures.makeGalaxy(192) } catch (e: Exception) { null }
+        if (travelGalaxy == null) travelGalaxy = try {
+            val dir = context.cacheDir
+            DiskCache.loadNamed(dir, "galaxy_travel") ?: Textures.makeTravelGalaxy(448).also { b -> saveAsync { DiskCache.saveNamed(dir, "galaxy_travel", b) } }
+        } catch (e: Throwable) { galaxyBmp }
         // galaxia: crece exponencialmente y se desvanece cuando la atravesamos
         val gb = travelGalaxy
         if (gb != null) {
             val gs = w * 0.35f * kotlin.math.exp(travelZ * 0.9f)
             val ga = (1f - ((gs / w) - 1.2f) / 2.5f).coerceIn(0f, 1f)
             if (ga > 0f) {
-                c.save(); c.translate(cx, cy); c.rotate(-20f + travelT * 3f); c.scale(1f, 0.6f)
-                rect.set(-gs, -gs, gs, gs)
-                addPaint.alpha = (230 * ga * al).toInt()
-                c.drawBitmap(gb, null, rect, addPaint)
-                c.restore()
+                // la inclinación cambia al acercarnos (perspectiva) y una segunda capa da volumen al disco
+                val grow = ((gs / w) / 3f).coerceIn(0f, 1f)
+                val tilt = 0.42f + 0.45f * grow
+                for (layer in 0 until 2) {
+                    c.save(); c.translate(cx, cy); c.rotate(-20f + travelT * (3f + layer)); c.scale(1f, tilt * (1f + layer * 0.08f))
+                    val gl = gs * (1f + layer * 0.12f)
+                    rect.set(-gl, -gl, gl, gl)
+                    addPaint.alpha = ((if (layer == 0) 235 else 90) * ga * al).toInt()
+                    c.drawBitmap(gb, null, rect, addPaint)
+                    c.restore()
+                }
+                // resplandor del núcleo
+                val wh0 = sprWhite
+                if (wh0 != null) {
+                    val cr = gs * 0.35f
+                    rect.set(cx - cr, cy - cr * tilt, cx + cr, cy + cr * tilt)
+                    addPaint.alpha = (150 * ga * al).toInt()
+                    c.drawBitmap(wh0, null, rect, addPaint)
+                }
             }
         }
         // neblina cósmica: capas que vienen hacia la cámara y la rodean
@@ -2414,6 +2431,20 @@ class GameView(ctx: Context) : View(ctx) {
                 addPaint.alpha = (200 * a * al * (0.4f + 0.6f * (travelZ / 2f).coerceIn(0f, 1f))).toInt().coerceIn(0, 255)
                 c.drawBitmap(hz, null, rect, addPaint)
                 c.restore()
+            }
+            // nebulosas de color que pasan de lado (rosa y azul), a distintas profundidades
+            for (k in 0 until 3) {
+                val ph = ((travelZ * 0.33f + k * 0.31f) % 1f)
+                val zz = 1f - ph
+                if (zz < 0.05f) continue
+                val ang = k * 2.4f + 1f
+                val px0 = cx + cos(ang) * 0.6f / zz * w * 0.25f
+                val py0 = cy + sin(ang) * 0.5f / zz * w * 0.25f
+                val rr = w * 0.35f / zz
+                rect.set(px0 - rr, py0 - rr * 0.7f, px0 + rr, py0 + rr * 0.7f)
+                val pnt = if (k % 2 == 0) hotPaint else bluePaint
+                pnt.alpha = (al * 120 * kotlin.math.sin(ph * PI.toFloat())).toInt().coerceIn(0, 255)
+                c.save(); c.rotate(k * 50f, px0, py0); c.drawBitmap(hz, null, rect, pnt); c.restore()
             }
         }
         // estrellas en 3D con estela según la velocidad
@@ -3647,7 +3678,7 @@ class GameView(ctx: Context) : View(ctx) {
                     return true
                 }
                 if (phase != 2 || paused || downOnPause || g.over || celebT > 0f) { lx = e.x; ly = e.y; return true }
-                g.drag((e.x - lx) / s, (e.y - ly) / s)
+                g.drag((e.x - lx) / s * 1.2f, (e.y - ly) / s * 1.2f)
                 lx = e.x; ly = e.y
                 if (hypot(e.x - sx, e.y - sy) > s * 0.4f) moved = true
             }
