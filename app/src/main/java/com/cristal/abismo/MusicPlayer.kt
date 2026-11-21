@@ -142,15 +142,15 @@ class Sfx(ctx: Context) {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
             .build()
     } catch (e: Exception) { null }
-    private val ids = IntArray(10)
-    private val ok = BooleanArray(10)
+    private val ids = IntArray(11)
+    private val ok = BooleanArray(11)
 
     init {
         try {
             pool?.setOnLoadCompleteListener { _, sampleId, status ->
                 for (i in ids.indices) if (ids[i] == sampleId) ok[i] = status == 0
             }
-            val raws = intArrayOf(R.raw.place_0, R.raw.place_1, R.raw.place_2, R.raw.place_3, R.raw.place_4, R.raw.place_5, R.raw.place_6, R.raw.bar_solo, R.raw.boom, R.raw.intro_boom)
+            val raws = intArrayOf(R.raw.place_0, R.raw.place_1, R.raw.place_2, R.raw.place_3, R.raw.place_4, R.raw.place_5, R.raw.place_6, R.raw.bar_solo, R.raw.boom, R.raw.intro_boom, R.raw.recharge)
             for (i in raws.indices) ids[i] = pool?.load(ctx, raws[i], 1) ?: 0
         } catch (e: Exception) { }
     }
@@ -177,6 +177,12 @@ class Sfx(ctx: Context) {
     fun bigBoom() {
         if (!enabled || !ok[9]) return
         try { pool?.play(ids[9], 1f, 1f, 3, 0, 1f) } catch (e: Exception) { }
+    }
+
+    /** Recarga de escudo al completar la barra. */
+    fun recharge() {
+        if (!enabled || !ok[10]) return
+        try { pool?.play(ids[10], 0.9f, 0.9f, 3, 0, 1f) } catch (e: Exception) { }
     }
 
     fun release() { try { pool?.release() } catch (e: Exception) { } }

@@ -27,6 +27,8 @@ class Placed(val id: Int, val type: Int, val rot: Int, var px: Int, var py: Int)
     var vv = 0f
 }
 
+const val ZONE = 1
+
 object Shapes {
     val all: Array<Array<IntArray>> = arrayOf(
         arrayOf(intArrayOf(-1, 0), intArrayOf(0, 0), intArrayOf(1, 0), intArrayOf(2, 0)), // I
@@ -83,6 +85,10 @@ class Game(val cols: Int, val rows: Int) {
     var level = 1
     var over = false
     var overTime = 0f
+    /** Sobre-escudos disponibles en esta partida (power-up comprado). */
+    var shields = 0
+    /** Veces que un sobre-escudo se activó (para la animación). */
+    var shieldEvents = 0
 
     /** Celdas eliminadas recientemente (x, y, tipo) para efectos. */
     val bursts = ArrayList<IntArray>()
@@ -128,7 +134,7 @@ class Game(val cols: Int, val rows: Int) {
         gy = if (Random.nextBoolean()) 1 else -1
         spawnY = if (gy < 0) cy + 1 else cy - 2
         val p = Piece(t, Array(4) { Shapes.all[t][it].copyOf() }, cx, spawnY)
-        p.bomb = level >= 2 && Random.nextFloat() < 0.07f
+        p.bomb = Random.nextFloat() < (if (level >= 2) 0.15f else 0.1f)
         piece = p
         contact = 0f; blocked = false; fallT = 0f; progMax = 0; accX = 0f; accY = 0f
         if (collides(p.cells, p.px, p.py)) over = true
@@ -281,7 +287,8 @@ class Game(val cols: Int, val rows: Int) {
             grid[y][x] = p.type + 1
             ids[y][x] = id
             ironDrops.add(intArrayOf(x, y, 10))
-            if (abs(x - cx) <= 1 && abs(y - cy) <= 1) danger = true
+            // zona roja: toda la franja horizontal central de 3 casillas de alto
+            if (abs(y - cy) <= ZONE) danger = true
         }
         placed[id] = Placed(id, p.type, p.rot, p.px, p.py)
         piece = null
@@ -295,7 +302,10 @@ class Game(val cols: Int, val rows: Int) {
             score += intArrayOf(0, 100, 300, 500, 800, 1000)[min(n, 5)] * level
         }
         score += 10
-        if (danger && n == 0) { over = true; return }
+        if (danger && n == 0) {
+            if (shields > 0) { shields--; clearBand(ZONE + 3); shieldEvents++; spawn(); return }
+            over = true; return
+        }
         spawn()
     }
 
@@ -325,6 +335,30 @@ class Game(val cols: Int, val rows: Int) {
         score += 40 * (kill.size - 1) * level
         bombEvents.add(intArrayOf(sx / 4, sy / 4, kill.size - 1))
         settle()
+    }
+
+    /** Destruye todas las naves que tengan alguna celda a `half` filas o menos de la línea central. */
+    private fun clearBand(half: Int) {
+        val kill = HashSet<Int>()
+        for (y in max(0, cy - half)..min(rows - 1, cy + half)) for (x in 0 until cols) if (grid[y][x] != 0) kill.add(ids[y][x])
+        for (y in 0 until rows) for (x in 0 until cols) {
+            if (grid[y][x] != 0 && ids[y][x] in kill) {
+                bursts.add(intArrayOf(x, y, grid[y][x]))
+                grid[y][x] = 0; ids[y][x] = 0
+            }
+        }
+        for (k in kill) placed.remove(k)
+        settle()
+    }
+
+    /** Regeneración: limpia la franja central (y 3 filas más) y la partida sigue donde se quedó. */
+    fun revive() {
+        if (!over) return
+        clearBand(ZONE + 3)
+        over = false
+        overTime = 0f
+        streak = 0
+        spawn()
     }
 
     private fun rowFull(y: Int) = grid[y].all { it != 0 }
@@ -417,7 +451,7 @@ class Game(val cols: Int, val rows: Int) {
         var best = 99
         for (y in 0 until rows) for (x in 0 until cols) {
             if (grid[y][x] != 0) {
-                val d = max(abs(x - cx), abs(y - cy))
+                val d = abs(y - cy)
                 if (d < best) best = d
             }
         }
