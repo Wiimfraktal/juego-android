@@ -44,7 +44,7 @@ class MusicPlayer(private val ctx: Context) {
             }
         }
 
-        fun setVol(v: Float) {
+        fun applyVol(v: Float) {
             if (kotlin.math.abs(v - applied) < 0.004f) return
             applied = v
             safe { mp?.setVolume(v, v) }
@@ -97,13 +97,13 @@ class MusicPlayer(private val ctx: Context) {
         val level = LEVEL * duck
         cur?.let {
             it.vol = (it.vol + dt / 1.8f).coerceAtMost(1f)
-            it.setVol(it.vol * level)
+            it.applyVol(it.vol * level)
         }
         val i = fading.iterator()
         while (i.hasNext()) {
             val v = i.next()
             v.vol -= dt / 1.2f
-            if (v.vol <= 0f) { v.kill(); i.remove() } else v.setVol(v.vol * level)
+            if (v.vol <= 0f) { v.kill(); i.remove() } else v.applyVol(v.vol * level)
         }
     }
 
