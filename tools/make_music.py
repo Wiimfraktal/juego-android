@@ -241,6 +241,50 @@ def shaker(dur=0.09):
     return hp * np.exp(-t * 45)
 
 
+def _smooth_gain(g, att, rel, circular=True):
+    """Suaviza una curva de ganancia por bloques: baja rápido (ataque) y sube despacio (liberación).
+    En modo circular arranca con el valor del final, para que el bucle de la canción no tenga saltos."""
+    out = np.empty_like(g)
+    v = 1.0
+    if circular:
+        for x in g:
+            v = v + (x - v) * (att if x < v else rel)
+    for i, x in enumerate(g):
+        k = att if x < v else rel
+        v = v + (x - v) * k
+        out[i] = v
+    return out
+
+
+def master_bus(L, R, blk=256):
+    """Bus maestro como en una mezcla profesional: compresor suave de "pegamento" (2:1) y limitador de picos
+    con anticipación, en lugar de saturar; conserva la dinámica natural de los instrumentos."""
+    n = len(L)
+    nb = (n + blk - 1) // blk
+    pad = nb * blk - n
+    M = np.pad((np.abs(L) + np.abs(R)) * 0.5, (0, pad))
+    rms = np.sqrt(np.mean(np.pad(L * L + R * R, (0, pad)).reshape(nb, blk) * 0.5, axis=1) + 1e-12)
+    db = 20 * np.log10(rms)
+    thr = np.percentile(db, 90) - 6.0
+    over = np.maximum(0, db - thr)
+    g = 10 ** (-over * (1 - 1 / 2.0) / 20)
+    g = _smooth_gain(g, 0.35, 0.03)
+    gs = np.interp(np.arange(n), np.arange(nb) * blk + blk / 2, g)
+    L, R = L * gs, R * gs
+    # limitador: pico por bloque con un bloque de anticipación
+    pk = np.max(np.pad(np.maximum(np.abs(L), np.abs(R)), (0, pad)).reshape(nb, blk), axis=1)
+    pk = np.maximum(pk, np.concatenate([pk[1:], pk[-1:]]))
+    ceil = np.percentile(pk, 99.5) * 0.98
+    gl = np.minimum(1.0, ceil / (pk + 1e-9))
+    gl = _smooth_gain(gl, 0.9, 0.02)
+    gls = np.interp(np.arange(n), np.arange(nb) * blk + blk / 2, gl)
+    L, R = L * gls, R * gls
+    m = max(np.max(np.abs(L)), np.max(np.abs(R))) + 1e-9
+    L, R = L / m, R / m
+    # recorte suavísimo solo en los últimos picos que se escapen
+    return np.tanh(L * 1.05) / np.tanh(1.05), np.tanh(R * 1.05) / np.tanh(1.05)
+
+
 class Mix:
     def __init__(self, seconds, tail=4.0):
         self.n = int(seconds * SR)
@@ -255,8 +299,16 @@ class Mix:
         sig = sig[: len(self.L) - i]
         gl = gain * np.cos((pan + 1) * np.pi / 4)
         gr = gain * np.sin((pan + 1) * np.pi / 4)
-        self.L[i:i + len(sig)] += sig * gl
-        self.R[i:i + len(sig)] += sig * gr
+        # imagen estéreo natural: el oído lejano recibe el sonido un poco después (hasta ~0.5 ms)
+        d = int(abs(pan) * 0.0003 * SR)
+        dl = d if pan > 0 else 0
+        dr = d if pan < 0 else 0
+        nL = min(len(sig), len(self.L) - i - dl)
+        nR = min(len(sig), len(self.R) - i - dr)
+        if nL > 0:
+            self.L[i + dl:i + dl + nL] += sig[:nL] * gl
+        if nR > 0:
+            self.R[i + dr:i + dr + nR] += sig[:nR] * gr
 
     def finish(self, wet=0.38, rt60=3.4, peak=0.89, bass=0.9, loop=True, room=False, sat=1.25):
         n = len(self.L)
@@ -283,6 +335,9 @@ class Mix:
                 ir -= np.convolve(ir, np.ones(4000) / 4000, mode="same") * 0.9
                 ir /= np.sqrt(np.sum(ir ** 2))
             irs.append(ir)
+        if room:  # reverberación parcialmente correlacionada: suena amplia en audífonos y no se cancela en la bocina del cel
+            irs[1] = 0.7 * irs[1] + 0.3 * irs[0]
+            irs[1] /= np.sqrt(np.sum(irs[1] ** 2))
         size = 1 << int(np.ceil(np.log2(n + ir_len)))
         outs = []
         for sig, ir in ((self.L, irs[0]), (self.R, irs[1])):
@@ -305,7 +360,10 @@ class Mix:
                 ch[:len(tail)] += tail
             L, R = L[:main], R[:main]
         m = max(np.max(np.abs(L)), np.max(np.abs(R)))
-        L, R = np.tanh(L / m * sat) / np.tanh(sat), np.tanh(R / m * sat) / np.tanh(sat)
+        if room:
+            L, R = master_bus(L / m, R / m)
+        else:
+            L, R = np.tanh(L / m * sat) / np.tanh(sat), np.tanh(R / m * sat) / np.tanh(sat)
         L, R = L * peak, R * peak
         return np.stack([L, R], axis=1)
 

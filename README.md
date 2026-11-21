@@ -24,3 +24,7 @@ La música usa grabaciones de la librería orquestal [VSCO 2 Community Edition](
 
 
 Batería, guitarras y contrabajo de los temas Épica, Neutron y Duro: bancos CC0 de Karoryfer Lecolds (Big Rusty Drums, Emilyguitar, Meatbass), https://github.com/sfzinstruments .
+
+Piano de cola de Neutron: Salamander Grand Piano V3 de Alexander Holm (licencia CC-BY 3.0), https://github.com/sfzinstruments/SalamanderGrandPiano .
+Órgano de tubos de Épica coral: grabado por Simon Dalzell (Ivy Audio), distribuido en VSCO 2 CE por Versilian Studios.
+Clarinete, flauta, violín solista, arpa, güiro y congas: VSCO 2 Community Edition (CC0).

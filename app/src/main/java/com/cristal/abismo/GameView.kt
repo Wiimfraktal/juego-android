@@ -2900,6 +2900,10 @@ class GameView(ctx: Context) : View(ctx) {
         paint.textAlign = Paint.Align.CENTER
         paint.textSize = u * 0.55f
         c.drawText("Cerrar", closeRect.centerX(), closeRect.centerY() + u * 0.2f, paint)
+        paint.textSize = u * 0.24f
+        paint.color = Color.argb(150, 190, 205, 235)
+        c.drawText("Sonidos: Salamander Grand Piano (A. Holm, CC-BY), VSCO 2 CE (Versilian Studios),", width / 2f, panelRect.bottom + u * 0.5f, paint)
+        c.drawText("órgano de Ivy Audio y bancos CC0 de Karoryfer Lecolds", width / 2f, panelRect.bottom + u * 0.85f, paint)
     }
 
     private fun drawPlayTab(c: Canvas, a: Float) {

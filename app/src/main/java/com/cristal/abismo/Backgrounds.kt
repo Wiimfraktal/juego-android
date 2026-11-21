@@ -43,7 +43,7 @@ object MusicThemes {
         MusicTheme("Heroica", 170, "Fanfarria de metales"),
         MusicTheme("Neutron", 160, "Folk-pop alegre: guitarra, contrabajo y piano"),
         MusicTheme("Duro", 190, "French house con sintetizadores"),
-        MusicTheme("Épica coral", 0, "Al equiparla, el menú suena con coro grave"),
-        MusicTheme("Regio", 150, "Cumbia regia: acordeón, guacharaca, bajo y metales")
+        MusicTheme("Épica coral", 0, "Al equiparla, el menú suena como himno: órgano y metales"),
+        MusicTheme("Regio", 150, "Cumbia regia: clarinete, güiro, congas y metales")
     )
 }

@@ -97,22 +97,29 @@ def name_midi(n):
     return 12 * (int(m.group(3)) + 1) + PC[m.group(1)] + acc
 
 
-def inst_from(pattern, shift=0, level=0.2):
+def inst_from(pattern, shift=0, level=0.2, mapper=None):
     """Instrumento por notas; calibra la octava del banco comparando con la altura medida."""
     files = sorted(glob.glob(pattern))
     items, seen = [], set()
     for p in files:
-        m = name_midi(os.path.basename(p))
+        m = (mapper or name_midi)(os.path.basename(p))
         if m is None or m in seen:
             continue
         seen.add(m)
         items.append((m, norm(read_any(p), level)))
     if not items:
         raise SystemExit("sin muestras: " + pattern)
-    mid = items[len(items) // 2]
-    f = pitch_of(mid[1])
-    measured = 69 + 12 * np.log2(f / 440.0)
-    off = int(round((measured - mid[0]) / 12.0)) * 12
+    # octava del banco: mediana de varias notas repartidas (una sola puede engañar al medidor)
+    items.sort(key=lambda t: t[0])
+    offs = []
+    for j in np.linspace(0, len(items) - 1, min(9, len(items))).astype(int):
+        m0, a0 = items[j]
+        try:
+            meas = 69 + 12 * np.log2(pitch_of(a0) / 440.0)
+            offs.append(int(round((meas - m0) / 12.0)) * 12)
+        except Exception:
+            pass
+    off = int(np.median(offs)) if offs else 0
     return Inst([(m + off + shift, a) for m, a in items])
 
 
@@ -170,9 +177,50 @@ class Kit:
         return hit(self.cache[key], dur)
 
 
+def salamander_midi(n):
+    m = re.match(r"([A-G])(#?)(\d)v\d+\.flac$", n)
+    if not m:
+        return None
+    return 12 * (int(m.group(3)) + 1) + PC[m.group(1).lower()] + (1 if m.group(2) else 0)
+
+
+class VelInst:
+    """Instrumento con capas de intensidad reales (p. ej. piano de cola): elige la grabación según la fuerza."""
+
+    def __init__(self, layers):
+        self.layers = layers  # [(velocidad 0..1, Inst)]
+
+    def note(self, m, dur, vel=0.7, att=0.002, rel=0.8):
+        v, inst = min(self.layers, key=lambda t: abs(t[0] - vel))
+        return inst.note(m, dur, att=att, rel=rel) * (0.55 + 0.45 * vel / max(v, 0.1))
+
+
 class Band:
-    def __init__(self, root):
+    def __init__(self, root, vsco=None):
         self.kit = Kit(root)
+        S = os.path.join(root, "SalamanderGrandPiano/Samples")
+        self.grand = VelInst([(v / 16, inst_from(os.path.join(S, f"*v{v}.flac"), level=0.2 * (0.45 + 0.55 * v / 16), mapper=salamander_midi))
+                              for v in (5, 9, 13, 16)])
+        if vsco:
+            V = lambda p: os.path.join(vsco, p)
+            org = lambda pre, base: (lambda n: (base + int(re.search(r"_(\d+)\.wav", n).group(1))) if n.startswith(pre) else None)
+            self.organ = inst_from(V("Keys/Organ/Loud/Rode_Man3Open_*.wav"), mapper=org("Rode_Man3Open_", 35))
+            self.pedal = inst_from(V("Keys/Organ/Loud/Rode_Pedal_*.wav"), mapper=org("Rode_Pedal_", 23), level=0.25)
+            self.clar = inst_from(V("Woodwinds/Clarinet/susLong/*_v2_rr1_sum.wav"))
+            self.clar_st = inst_from(V("Woodwinds/Clarinet/stac/*_v2_rr1_sum.wav"))
+            self.flute = inst_from(V("Woodwinds/Flute/expvib/*_v1_1.wav"))
+            self.svln = inst_from(V("Strings/Solo Violin/Arco Vib/*_f.wav"))
+            self.harp = inst_from(V("Strings/Harp/*_mf.wav"))
+            self.tpt_vib = inst_from(V("Brass/Trumpet/susvib/*_v1_rr1.wav"))
+            one = lambda p: norm(read_any(V(p)), 0.2)
+            self.guiro_long = one("Percussion/Guiro-M_v1_Sum.wav")
+            self.guiro_hit = [one("Percussion/Guiro-Hit_v1_rr1_Sum.wav"), one("Percussion/Guiro-Hit_v1_rr2_Sum.wav")]
+            self.conga = [one("Percussion/Conga-HitN_v2_rr1_Sum.wav"), one("Percussion/Conga-HitN_v3_rr2_Sum.wav")]
+            self.conga_tap = one("Percussion/Conga-Tap1_v1_rr1_Sum.wav")
+            self.tumba = one("Percussion/Tumba-HitN_v3_rr1_Sum.wav")
+            self.quinto = one("Percussion/Quinto-HitN_v2_rr1_Sum.wav")
+            self.tamb = one("Percussion/Tamb1-Hit_v2_rr1_Sum.wav")
+            self.cym_swell = one("Percussion/susCymb1-cresc-Median_v1.wav")
         E = os.path.join(root, "karoryfer.emilyguitar/notes")
         self.egtr = inst_from(os.path.join(E, "*_f_rr1.wav"))
         self.egtr_m = inst_from(os.path.join(E, "*_mp_rr2.wav"))
@@ -325,62 +373,64 @@ def game_rock(lib, band):
 
 # ------------------------------------------------------------------ Neutron: folk-pop alegre y nostálgico (todo grabado)
 def neutron(lib, band):
-    """Folk-pop alegre con piano vertical real al frente: mano izquierda saltarina y melodía en la derecha."""
+    """Folk-pop alegre y nostálgico, como banda tocando en vivo: piano de cola real al frente (con capas de
+    intensidad), contrabajo pizzicato, batería con escobillas, clarinete en contracanto, violín solista y arpa."""
     k = band.kit
     bpm = 104
     beat = 60.0 / bpm
     bar = 4 * beat
     sw = 0.63
     swt = lambda bt: bt + (sw - 0.5) if abs(bt % 1 - 0.5) < 1e-6 else bt
-    hum = lambda: RNG.uniform(-0.007, 0.007)
+    hum = lambda: RNG.uniform(-0.008, 0.008)
     m = Mix(32 * bar, tail=3.0)
     G, D, Em, C, Bm, Am, E, A = 43, 38, 40, 36, 35, 45, 40, 45
     A_ = [(G, MAJ), (D, MAJ), (Em, MIN), (C, MAJ), (G, MAJ), (E, MAJ), (A, MAJ), (D, MAJ)]
     B_ = [(C, MAJ), (D, MAJ), (Bm, MIN), (Em, MIN), (Am, MIN), (D, MAJ), (G, MAJ), (D, MAJ)]
     prog = A_ + A_ + B_ + A_
-    pn = lib.piano
+    pn = band.grand
     drums = np.zeros(len(m.L))
 
-    def pno(t, n, d, g, pan=0.15):
-        m.add(t + hum(), pn.note(n, d, att=0.002, rel=0.9), g * RNG.uniform(0.88, 1.08), pan=pan)
+    def pno(t, n, d, vel, g=1.0, pan=0.1):
+        m.add(t + hum(), pn.note(n, d, vel=min(1, vel * RNG.uniform(0.9, 1.08)), rel=1.0), 0.42 * g, pan=pan)
 
     for b, (root, q) in enumerate(prog):
         t0 = b * bar
         sec = b // 8
-        lo = root - 12 if root >= 41 else root  # bajo del piano (octava 2)
-        chord = [root + 12, root + 12 + q, root + 19]  # acorde cerrado en el centro del teclado
-        chord = [n if n < 64 else n - 12 for n in chord]
-        # mano izquierda: bajo en 1 y 3, acorde en 2 y 4 (con un empujón en el "y" del 4)
-        pno(t0, lo, beat * 0.9, 0.34, pan=-0.2)
-        pno(t0 + 2 * beat, lo + 7 if lo + 7 < 50 else lo - 5, beat * 0.9, 0.3, pan=-0.2)
+        lo = root - 12 if root >= 41 else root
+        chord = [n if n < 64 else n - 12 for n in (root + 12, root + 12 + q, root + 19)]
+        # mano izquierda saltarina: bajo en 1 y 3, acorde en 2 y 4
+        pno(t0, lo, beat * 0.95, 0.72, pan=-0.25)
+        pno(t0 + 2 * beat, lo + 7 if lo + 7 < 50 else lo - 5, beat * 0.95, 0.62, pan=-0.25)
         for bt in (1, 3):
             for n in chord:
-                pno(t0 + bt * beat, n, beat * 0.45, 0.15, pan=0.0)
+                pno(t0 + bt * beat, n, beat * 0.5, 0.45, 0.8, pan=-0.05)
         if sec >= 1:
             for n in chord:
-                pno(t0 + swt(3.5) * beat, n, beat * 0.3, 0.09, pan=0.0)
-        # contrabajo pizzicato real desde la segunda sección
+                pno(t0 + swt(3.5) * beat, n, beat * 0.3, 0.32, 0.6, pan=-0.05)
         if sec >= 1:
             nxt = prog[(b + 1) % len(prog)][0]
             rb = root - 12 if root >= 40 else root
             nb = nxt - 12 if nxt >= 40 else nxt
             for bt, n in ((0, rb), (2, rb + 7 if rb + 7 < 50 else rb - 5), (3, nb - 1 if nb > rb else nb + 1)):
-                m.add(t0 + bt * beat + hum(), band.pizz.note(n, beat * 0.8, att=0.003, rel=0.2), 0.42, pan=-0.05)
-        # escobillas suaves
-        if sec >= 1:
+                m.add(t0 + bt * beat + hum(), band.pizz.note(n, beat * 0.8, att=0.003, rel=0.25), 0.45, pan=-0.1)
             for i in range(8):
                 place(drums, t0 + swt(i / 2) * beat + hum(), k.get("hhb", 0.35 + 0.25 * (i % 2 == 0)), 0.38)
-            place(drums, t0 + beat, k.get("brush", 0.7), 0.6)
-            place(drums, t0 + 3 * beat, k.get("brush", 0.8), 0.65)
-            place(drums, t0, k.get("kick", 0.4), 0.5)
-        if b in (16, 24):
+            place(drums, t0 + beat + hum(), k.get("brush", 0.7), 0.6)
+            place(drums, t0 + 3 * beat + hum(), k.get("brush", 0.8), 0.65)
+            place(drums, t0, k.get("kick", 0.45), 0.55)
+        else:
+            if b % 2 == 1:
+                place(drums, t0 + 3 * beat, k.get("side", 0.4), 0.35)
+        if b in (8, 16, 24):
             place(drums, t0, k.get("ride", 0.5), 0.35)
-        # cuerdas cálidas en B y en el final
-        if sec >= 2:
+            # arpa: glissando de entrada en cada sección
             tri = triad(root, q)
-            for i, n in enumerate(tri):
-                m.add(t0, lib.vla.note(n + 24 if n + 24 < 70 else n + 12, bar + 0.3, att=0.5, rel=0.9), 0.07, pan=0.35 - 0.15 * i)
-            m.add(t0, lib.vc.note(root + 12 if root + 12 < 55 else root, bar + 0.3, att=0.5, rel=0.9), 0.1, pan=-0.3)
+            for j in range(12):
+                nn = tri[j % 3] + 36 + 12 * (j // 3)
+                m.add(t0 - beat + j * beat / 12, band.harp.note(min(nn, 96), 1.2, att=0.002, rel=0.8), 0.13, pan=0.45)
+        if sec >= 2:
+            for i, n in enumerate(triad(root, q)):
+                m.add(t0, lib.vla.note(n + 24 if n + 24 < 70 else n + 12, bar + 0.3, att=0.5, rel=0.9), 0.06, pan=0.4 - 0.15 * i)
     melA = [(71, 0, 1), (74, 1, 1), (71, 2, .5), (69, 2.5, .5), (67, 3, 1),
             (69, 4, 1.5), (66, 5.5, .5), (69, 6, 1), (74, 7, 1),
             (67, 8, 1), (71, 9, 1), (76, 10, 1.5), (74, 11.5, .5),
@@ -400,20 +450,23 @@ def neutron(lib, band):
     for base, mel in ((0, melA), (8, melA), (16, melB), (24, melA)):
         for n, bt, d in mel:
             st = base * bar + swt(bt) * beat
-            g = 0.36 if base != 0 else 0.33
-            pno(st, n + 12, d * beat, g, pan=0.25)
-            if base >= 8 and d >= 1:  # en las repeticiones la mano derecha dobla en tercera abajo
-                pno(st, n + 12 - (3 if (n % 12) in (11, 4, 9) else 4), d * beat, g * 0.45, pan=0.25)
+            accent = 0.85 if (bt % 2 == 0) else 0.7
+            pno(st, n + 12, d * beat, accent, pan=0.3)
+            if base >= 8 and d >= 1:
+                pno(st, n + 12 - (3 if (n % 12) in (11, 4, 9) else 4), d * beat, accent * 0.7, 0.5, pan=0.3)
+            if base == 8 and d >= 1:  # clarinete contesta una tercera abajo, suave
+                m.add(st + beat * 0.5, band.clar.note(n - (3 if (n % 12) in (11, 4, 9) else 4), d * beat * 0.9, att=0.06, rel=0.3), 0.18, pan=-0.35)
             if base == 16:
-                m.add(st, lib.hn.note(n - 12, d * beat + 0.15, att=0.08, rel=0.5), 0.2, pan=-0.1)
+                m.add(st, band.clar.note(n, d * beat + 0.1, att=0.04, rel=0.3), 0.2, pan=-0.3)
             if base == 24:
-                m.add(st, lib.vln.note(n, d * beat + 0.15, att=0.1, rel=0.5), 0.12, pan=-0.25)
+                m.add(st, band.svln.note(n + 12, d * beat + 0.15, att=0.06, rel=0.4), 0.2, pan=-0.2)
     m.add(0, drums, 0.55)
-    return m.finish(wet=0.3, rt60=1.6, bass=0.15, room=True, sat=0.9)
+    return m.finish(wet=0.32, rt60=1.7, bass=0.15, room=True)
 
 
 def epica_coro(lib, band):
-    """Épica coral para el menú: himno grave y largo con coro masculino a cuatro voces (solo vocales)."""
+    """Épica coral para el menú: himno grave y largo con órgano de tubos real, coral de metales (trompas,
+    trombones y tuba), cuerdas, timbales y platillo. Todo grabado, sin sonidos generados."""
     bpm = 54
     beat = 60.0 / bpm
     bar = 4 * beat
@@ -423,65 +476,42 @@ def epica_coro(lib, band):
     for b, (root, q) in enumerate(prog):
         t0 = b * bar
         tri = triad(root, q)
-        m.add(t0, lib.cb.note(root, bar + 0.6, att=0.6, rel=1.5), 0.35)
-        m.add(t0, lib.vc.note(root + 12, bar + 0.6, att=0.7, rel=1.5), 0.22, pan=-0.3)
-        # coro a cuatro voces: bajo profundo, barítono, tenor y tenor alto (en la segunda vuelta)
-        voices = [(root, 0.2, 0.0), (root + 7 if root + 7 < 46 else root + 7 - 12 + 12, 0.15, -0.3),
-                  (root + 12 + q, 0.13, 0.3)] + ([(root + 19, 0.11, -0.15)] if b >= 8 else [])
-        for n, g, pan in voices:
-            v1 = mm.OH if b % 2 == 0 else mm.AH
-            v2 = mm.AH if b % 2 == 0 else mm.OH
-            sig = mm.voice(mm.midi(n), bar + 0.8, v1, a=1.4, r=1.8, ens=9, depth=0.0025, nh=32, tilt=1.25, vowel2=v2)
-            m.add(t0, sig, g, pan=pan)
+        # órgano: pedal grave y acorde lleno en el manual
+        m.add(t0, band.pedal.note(root - 12 if root >= 36 else root, bar + 0.3, att=0.08, rel=1.4), 0.4)
+        for i, n in enumerate((root + 12, root + 12 + q, root + 19, root + 24)):
+            m.add(t0, band.organ.note(n if n < 66 else n - 12, bar + 0.3, att=0.06, rel=1.4), 0.12, pan=-0.3 + 0.2 * i)
+        # coral de metales: tuba, trombones y trompas en posición cerrada (como un coro de voces graves)
+        m.add(t0, lib.tuba.note(root, bar + 0.4, att=0.25, rel=1.0), 0.32, pan=0.1)
+        m.add(t0, lib.tbn.note(root + 12, bar + 0.4, att=0.3, rel=1.0), 0.24, pan=-0.2)
+        m.add(t0, lib.tbn.note(root + 12 + q, bar + 0.4, att=0.3, rel=1.0), 0.2, pan=0.25)
+        m.add(t0, lib.hn.note(root + 19, bar + 0.4, att=0.35, rel=1.0), 0.2, pan=-0.35)
         if b >= 8:
-            for i, nn in enumerate(tri):
-                m.add(t0, lib.vla.note(nn + 24 if nn + 24 < 70 else nn + 12, bar + 0.6, att=0.8, rel=1.5), 0.07, pan=0.4 - 0.2 * i)
+            m.add(t0, lib.hn.note(root + 24 + q, bar + 0.4, att=0.4, rel=1.0), 0.17, pan=0.35)
+            for i, n in enumerate(tri):
+                m.add(t0, lib.vla.note(n + 24 if n + 24 < 70 else n + 12, bar + 0.6, att=0.7, rel=1.5), 0.08, pan=0.45 - 0.25 * i)
+            m.add(t0, lib.vc.note(root + 12, bar + 0.6, att=0.6, rel=1.5), 0.16, pan=-0.4)
         if b in (0, 8):
-            m.add(t0, hit(lib.timp_lo, 6.0), 0.2, pan=-0.2)
-        if b == 15:
-            m.add(t0, hit(lib.timp_roll, bar), 0.15)
-    # la melodía de la Épica cantada por tenores y barítonos en unísono, frases largas de himno
+            m.add(t0, hit(lib.timp_lo, 6.0), 0.24, pan=-0.2)
+        if b in (7, 15):
+            m.add(t0, hit(lib.timp_roll, bar), 0.2)
+            m.add(t0, band.cym_swell, 0.18, pan=0.3)
+    # la melodía de la Épica: trompeta y trompas en unísono, frases largas de himno
     mel = [(62, 0, 2), (69, 2, 2), (65, 4, 1), (67, 5, 1), (69, 6, 2), (72, 8, 3), (69, 11, 1),
            (67, 12, 2), (64, 14, 2), (74, 16, 2), (69, 18, 2), (67, 20, 2), (70, 22, 2),
            (74, 24, 2), (77, 26, 2), (76, 28, 3), (73, 31, 1)]
     for base in (0, 8):
         for n, bt, d in mel:
             st = base * bar + bt * beat
-            for oc, g in ((-12, 0.2), (-24, 0.12)):
-                sig = mm.voice(mm.midi(n + oc), d * beat + 0.4, mm.OH, a=0.35, r=0.8, ens=8, depth=0.002, nh=30, tilt=1.15)
-                m.add(st, sig, g, pan=0.05)
-    m.add(8 * bar, hit(lib.susp), 0.12, pan=0.3)
-    return m.finish(wet=0.55, rt60=5.0, bass=0.2, room=True, sat=0.85)
-
-
-def accordion(freq, dur, att=0.03, rel=0.08):
-    """Acordeón: tres lengüetas por nota (una afinada y dos desafinadas, efecto "musette"), timbre de lengüeta
-    con resonancias de caja y fuelle con leve vibración. Modelo de un instrumento acústico, sin sonido electrónico."""
-    n = int((dur + rel) * SR)
-    t = np.arange(n) / SR
-    out = np.zeros(n)
-    for cents in (0.0, 14.0, -12.0):
-        f = freq * 2 ** (cents / 1200)
-        ph = (t * f + RNG.uniform()) % 1.0
-        # lengüeta: pulso asimétrico (rico en armónicos impares y pares)
-        reed = np.where(ph < 0.32, 1.0, -0.47) + 0.3 * (2 * ph - 1)
-        out += reed
-    out /= 3
-    out = lowpass(out, 3800)
-    X = np.fft.rfft(out)
-    fr = np.fft.rfftfreq(n, 1 / SR)
-    X *= 1 + 1.2 * np.exp(-((fr - 1200) / 500) ** 2) + 0.6 * np.exp(-((fr - 2600) / 700) ** 2)
-    out = np.fft.irfft(X, n)
-    env = np.ones(n)
-    na = max(1, int(att * SR)); env[:na] = np.linspace(0, 1, na)
-    nd = int(dur * SR); env[nd:] = np.linspace(1, 0, n - nd)
-    bellows = 1 + 0.06 * np.sin(2 * np.pi * 5.5 * t)
-    return out * env * bellows / (np.max(np.abs(out)) + 1e-9) * 0.6
+            m.add(st, lib.hn.note(n - 12, d * beat + 0.3, att=0.12, rel=0.7), 0.3, pan=0.05)
+            if base == 8:
+                m.add(st, band.tpt_vib.note(n, d * beat + 0.3, att=0.1, rel=0.7), 0.2, pan=0.1)
+                m.add(st, band.organ.note(n, d * beat + 0.2, att=0.05, rel=0.8), 0.08, pan=0.0)
+    return m.finish(wet=0.6, rt60=5.5, bass=0.2, room=True)
 
 
 def regio(lib, band):
-    """Cumbia regia (estilo Monterrey): acordeón al frente, güiro/guacharaca en corcheas, bajo sincopado de cumbia,
-    caja de aro en el contratiempo y metales en los clímax. Tono menor con saltos emotivos. Melodía original."""
+    """Cumbia regia (Monterrey) como conjunto en vivo: clarinete y trompetas al frente, güiro y congas reales,
+    bajo sincopado, guitarra rasgueada a contratiempo y trombones. En menor, con saltos emotivos."""
     k = band.kit
     bpm = 94
     beat = 60.0 / bpm
@@ -493,37 +523,38 @@ def regio(lib, band):
     B_ = [(F, MAJ), (G, MAJ), (C, MAJ), (Am, MIN), (Dm, MIN), (E, MAJ), (Am, MIN), (E, MAJ)]
     prog = A_ + A_ + B_ + A_
     gtr = np.zeros(n); perc = np.zeros(n)
-    scrape_long = mm.shaker(0.16) * 0.8
-    scrape = mm.shaker(0.07)
+    hum = lambda: RNG.uniform(-0.007, 0.007)
     for b, (root, q) in enumerate(prog):
         t0 = b * bar
         sec = b // 8
         nb = root - 12 if root > 40 else root
-        # bajo de cumbia: 1, "y" del 2, 3 y "y" del 4 (tónica-quinta)
-        for bt, nn, g in ((0, nb, 0.6), (1.5, nb + 7 if nb + 7 < 45 else nb - 5, 0.4), (2, nb, 0.55), (3.5, nb + 7 if nb + 7 < 45 else nb - 5, 0.42)):
-            m.add(t0 + bt * beat, band.pizz.note(nn, beat * 0.55, att=0.003, rel=0.12), g)
-            m.add(t0 + bt * beat, band.ebass.note(nn, beat * 0.5, att=0.003, rel=0.1), g * 0.5)
-        # guacharaca: larga en el tiempo, cortas en las semicorcheas siguientes
-        for x in range(8):
-            place(perc, t0 + x * beat / 2, scrape_long if x % 2 == 0 else scrape, 0.35 if x % 2 == 0 else 0.25)
-        # caja de aro en el contratiempo y bombo suave
-        if sec >= 1 or b >= 4:
-            for bt in (1, 3):
-                m.add(t0 + bt * beat + beat / 2, k.get("side", 0.7), 0.32, pan=0.15)
-            m.add(t0, k.get("kick", 0.55), 0.4)
-            m.add(t0 + 2 * beat, k.get("kick", 0.5), 0.35)
-        # guitarra: acordes rasgueados cortos en el "y" de cada tiempo
+        fifth = nb + 7 if nb + 7 < 45 else nb - 5
+        for bt, nn, g in ((0, nb, 0.6), (1.5, fifth, 0.42), (2, nb, 0.55), (3.5, fifth, 0.45)):
+            m.add(t0 + bt * beat + hum(), band.pizz.note(nn, beat * 0.55, att=0.003, rel=0.12), g, pan=-0.05)
+            m.add(t0 + bt * beat + hum(), band.ebass.note(nn, beat * 0.5, att=0.003, rel=0.1), g * 0.45, pan=-0.05)
+        # güiro real: raspado largo en el tiempo y golpes cortos en el contratiempo
+        for x in range(4):
+            place(perc, t0 + x * beat + hum(), band.guiro_long[: int(beat * 0.45 * SR)], 0.55)
+            place(perc, t0 + x * beat + beat * 0.5 + hum(), band.guiro_hit[x % 2], 0.4)
+            place(perc, t0 + x * beat + beat * 0.75 + hum(), band.guiro_hit[(x + 1) % 2], 0.28)
+        # congas: tumbao de cumbia
+        if b >= 2:
+            for bt, sm, g in ((0, band.conga_tap, 0.3), (1, band.conga[0], 0.45), (1.5, band.conga[1], 0.38),
+                              (2, band.conga_tap, 0.3), (3, band.tumba, 0.5), (3.5, band.quinto, 0.35)):
+                m.add(t0 + bt * beat + hum(), sm, g, pan=0.35)
+            m.add(t0, k.get("kick", 0.5), 0.35)
+            m.add(t0 + 2 * beat, k.get("kick", 0.45), 0.3)
+            if sec >= 1:
+                m.add(t0 + beat * 1.5, band.tamb, 0.15, pan=-0.4)
+                m.add(t0 + beat * 3.5, band.tamb, 0.15, pan=-0.4)
         tri = sorted(x if x < 64 else x - 12 for x in (root + 12, root + 12 + q, root + 19))
         for bt in (0.5, 1.5, 2.5, 3.5):
-            for i, nn in enumerate(tri):
-                place(gtr, t0 + bt * beat + i * 0.007, oq._acoustic(nn, beat * 0.35), 0.5)
-        # cuerdas de fondo en el estribillo para emoción
+            chord_gtr(band.gretsch_p, gtr, t0 + bt * beat + hum(), tri, beat * 0.32, 0.7, strum=0.007)
         if sec >= 2:
             for i, nn in enumerate(triad(root, q)):
-                m.add(t0, lib.vla.note(nn + 24 if nn + 24 < 72 else nn + 12, bar + 0.3, att=0.4, rel=0.8), 0.08, pan=0.35 - 0.15 * i)
+                m.add(t0, lib.vla.note(nn + 24 if nn + 24 < 72 else nn + 12, bar + 0.3, att=0.4, rel=0.8), 0.07, pan=0.4 - 0.15 * i)
         if b in (8, 16, 24):
             m.add(t0, k.get("crash", 0.6), 0.3, pan=0.3)
-    # melodía en menor con saltos de sexta y octava al inicio de frase (lo emotivo)
     mel = [(64, 0, .5), (69, .5, 1), (72, 1.5, .5), (71, 2, .5), (69, 2.5, 1.5),
            (69, 4, .5), (76, 4.5, 1), (74, 5.5, .5), (72, 6, .5), (71, 6.5, 1.5),
            (62, 8, .5), (69, 8.5, 1), (72, 9.5, .5), (74, 10, 1), (71, 11, 1),
@@ -540,27 +571,53 @@ def regio(lib, band):
             (71, 20, .5), (76, 20.5, 1), (80, 21.5, .5), (83, 22, 2),
             (81, 24, 1), (76, 25, .5), (72, 25.5, .5), (69, 26, 2),
             (68, 28, 1), (71, 29, 1), (76, 30, 2)]
-    acc = np.zeros(n)
+    third = lambda nn: nn - (3 if nn % 12 in (0, 5, 7) else 4)
     for base, ml in ((0, mel), (8, mel), (16, melB), (24, mel)):
         for nn, bt, d in ml:
-            st = base * bar + bt * beat
-            place(acc, st, accordion(mm.midi(nn), d * beat * 0.93, att=0.02), 1.0)
+            st = base * bar + bt * beat + hum()
+            ins = band.clar if d >= 1 else band.clar_st
+            m.add(st, ins.note(nn, d * beat * 0.95, att=0.02, rel=0.2), 0.36, pan=0.1)
             if base >= 8:
-                place(acc, st, accordion(mm.midi(nn - (3 if nn % 12 in (0, 5, 7) else 4)), d * beat * 0.93, att=0.02), 0.5)
-    # metales: trompetas y trombón cantan el estribillo y rematan las frases
-    for nn, bt, d in melB:
-        st = 16 * bar + bt * beat
-        m.add(st, lib.tpt.note(nn, d * beat * 0.9, att=0.02, rel=0.25), 0.2, pan=0.25)
-        m.add(st, lib.tbn.note(nn - 12, d * beat * 0.9, att=0.03, rel=0.25), 0.22, pan=-0.25)
+                m.add(st, ins.note(third(nn), d * beat * 0.95, att=0.02, rel=0.2), 0.2, pan=-0.15)
+            if base == 16 or base == 24:
+                m.add(st, band.tpt_vib.note(nn, d * beat * 0.92, att=0.03, rel=0.25), 0.2 if base == 16 else 0.13, pan=0.3)
+            if base == 16:
+                m.add(st, lib.tbn.note(nn - 12, d * beat * 0.9, att=0.03, rel=0.25), 0.16, pan=-0.3)
     for base in (8, 24):
         st = (base + 7) * bar + 2 * beat
         for i, nn in enumerate((68, 71, 76)):
-            m.add(st + i * beat / 2, lib.tpt.note(nn, beat * 0.45, att=0.01, rel=0.2), 0.26, pan=0.25)
-            m.add(st + i * beat / 2, lib.tbn.note(nn - 12, beat * 0.45, att=0.01, rel=0.2), 0.24, pan=-0.25)
-    m.add(0, acc, 0.44, pan=0.08)
-    m.add(0, oq._body_eq(gtr), 0.26, pan=-0.4)
-    m.add(0, highpass(perc, 2500), 0.5, pan=0.35)
-    return m.finish(wet=0.2, rt60=1.5, bass=0.22, room=True, sat=0.95)
+            m.add(st + i * beat / 2, lib.tpt.note(nn, beat * 0.45, att=0.01, rel=0.2), 0.24, pan=0.25)
+            m.add(st + i * beat / 2, lib.tbn.note(nn - 12, beat * 0.45, att=0.01, rel=0.2), 0.22, pan=-0.25)
+    m.add(0, mm.amp(gtr, drive=1.3, cut=6500), 0.24, pan=-0.45)
+    m.add(0, highpass(perc, 900), 0.55, pan=0.4)
+    return m.finish(wet=0.24, rt60=1.6, bass=0.2, room=True)
+
+
+def bar_solo_live(lib, band):
+    """Solo corto al completar la barra: guitarra eléctrica grabada con amplificador, batería y metales."""
+    k = band.kit
+    bpm = 150
+    beat = 60.0 / bpm
+    m = Mix(3.4, tail=1.6)
+    lead = np.zeros(len(m.L)); rhy = np.zeros(len(m.L))
+    notes = [(69, 0, 0.5), (72, 0.5, 0.5), (74, 1, 0.5), (76, 1.5, 0.5), (79, 2, 0.5), (81, 2.5, 0.5),
+             (79, 3, 0.25), (81, 3.25, 0.25), (84, 3.5, 0.5), (81, 4, 2.6)]
+    for nt, b, d in notes:
+        place(lead, b * beat, band.egtr.note(nt - 12, d * beat + 0.15, att=0.003, rel=0.3), 1.0)
+    chord_gtr(band.egtr, rhy, 0, [45, 52, 57], 1.6, 0.9)
+    chord_gtr(band.egtr, rhy, 4 * beat, [41, 48, 53], 1.8, 0.9)
+    m.add(0, mm.amp(lead, drive=10.0, cut=5600), 0.4, pan=0.05)
+    m.add(0, mm.amp(highpass(rhy, 110), drive=7.0), 0.22, pan=-0.4)
+    m.add(0, k.get("crash", 1.0), 0.5, pan=0.3)
+    m.add(0, k.get("kick", 1.0), 0.8)
+    m.add(0, hit(lib.timp_lo, 2.5), 0.5)
+    for nn in (45, 52, 57):
+        m.add(0, lib.hn_st.note(nn, 0.6, att=0.003, rel=0.4), 0.3)
+    for x in range(6):
+        m.add(x * beat / 2, k.get("snare", 0.6 + 0.07 * x), 0.5, pan=0.1)
+    m.add(4 * beat, k.get("crash", 0.9), 0.4, pan=-0.3)
+    m.add(4 * beat, k.get("kick", 1.0), 0.7)
+    return m.finish(wet=0.25, rt60=1.8, bass=0.2, loop=False, room=True)
 
 
 def mega_boom(lib, band):
@@ -761,7 +818,7 @@ def duro(lib, band):
 
 if __name__ == "__main__":
     lib = oq.Lib(sys.argv[1])
-    band = Band(sys.argv[2])
+    band = Band(sys.argv[2], sys.argv[1])
     out = sys.argv[3]
     what = sys.argv[4] if len(sys.argv) > 4 else "all"
     if what in ("all", "game"):
@@ -776,6 +833,11 @@ if __name__ == "__main__":
         mm.save_wav_mono(mega_boom(lib, band), out, "intro_boom")
     if what in ("all", "regio"):
         mm.save(brighten(regio(lib, band), 0.7), out, "theme_regio")
+    if what in ("all", "solo"):
+        st = bar_solo_live(lib, band)
+        f = int(0.06 * SR)
+        st[-f:] *= np.linspace(1, 0, f)[:, None]
+        oq.save_stereo_wav(st, os.path.join(out, "bar_solo.wav"))
     if what in ("all", "coro"):
         mm.save(brighten(epica_coro(lib, band), 0.4), out, "theme_coro")
     print("ok")

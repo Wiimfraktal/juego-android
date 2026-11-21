@@ -49,7 +49,7 @@ class Announcer(private val ctx: Context) {
         const val LIMIT = 12; const val RECORD = 13; const val PROMO = 14
         const val OTHER = 15; const val GREAT = 16; const val KEEP = 17; const val BRUTAL = 18
         val MILESTONES = mapOf(5 to 19, 10 to 20, 15 to 21, 20 to 22, 30 to 23, 50 to 24)
-        private const val VER = "v5"
+        private const val VER = "v6"
     }
 
     var enabled = true
@@ -82,8 +82,8 @@ class Announcer(private val ctx: Context) {
             if (chosen == null) { t.shutdown(); return }
             t.language = chosen
             pickMaleVoice(t, chosen)
-            t.setPitch(0.6f)
-            t.setSpeechRate(0.86f)
+            t.setPitch(0.56f)
+            t.setSpeechRate(0.82f)
             for (i in PHRASES.indices) {
                 val raw = File(dir, "vox_raw_$i.wav")
                 val latch = CountDownLatch(1)
@@ -162,7 +162,7 @@ class Announcer(private val ctx: Context) {
         // tono un poco más grave por re-muestreo (apenas más lento)
         val ratio = 0.92f
         val n = ((b - a) / ratio).toInt()
-        val y = FloatArray(n + (0.5f * sr).toInt())
+        val y = FloatArray(n + (0.9f * sr).toInt())
         for (i in 0 until n) {
             val pos = a + i * ratio
             val k = pos.toInt()
@@ -199,12 +199,12 @@ class Announcer(private val ctx: Context) {
         }
         // reverberación de sala corta (Schroeder: 4 peines + 2 pasa-todo)
         val wet = FloatArray(y.size)
-        val combs = intArrayOf(1116, 1188, 1277, 1356).map { it * sr / 44100 }
+        val combs = intArrayOf(1116, 1188, 1277, 1356).map { it * 16 / 10 * sr / 44100 }
         for (d in combs) {
             val buf = FloatArray(d); var idx = 0
             for (i in y.indices) {
                 val o = buf[idx]
-                buf[idx] = y[i] + o * 0.6f
+                buf[idx] = y[i] + o * 0.78f
                 idx = (idx + 1) % d
                 wet[i] += o * 0.25f
             }
@@ -220,7 +220,7 @@ class Announcer(private val ctx: Context) {
             }
         }
         var pk2 = 1e-6f
-        for (i in y.indices) { y[i] = y[i] * 0.92f + wet[i] * 0.12f; pk2 = max(pk2, abs(y[i])) }
+        for (i in y.indices) { y[i] = y[i] * 0.9f + wet[i] * 0.2f; pk2 = max(pk2, abs(y[i])) }
         writeWav(dst, y, sr, 0.95f / pk2)
     }
 
