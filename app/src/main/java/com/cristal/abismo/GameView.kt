@@ -70,6 +70,8 @@ class GameView(ctx: Context) : View(ctx) {
         const val PULL = 2.5f      // duración del alejamiento
         const val MENU_SC = 1.9f
         const val APPROACH = 1.6f
+        /** Tamaño relativo del planeta al empezar la llegada (igual al último cuadro del viaje). */
+        const val APPROACH_SC0 = 0.12f
         const val T_GAL = 2.3f
         const val T_THRU = 4.0f
         const val T_SYS = 6.4f
@@ -255,6 +257,12 @@ class GameView(ctx: Context) : View(ctx) {
     private val tabRect3 = RectF()
     private val gameGear = RectF()
     private var settingsFromGame = false
+    /** Dificultad: 0 Normal, 1 Heroico, 2 Legendario. */
+    private var diff = try { prefs.getInt("diff", 0).coerceIn(0, 2) } catch (e: Exception) { 0 }
+    private val diffRect = Array(3) { RectF() }
+    private var occl = 0f
+    private var occlX = 0f
+    private var occlY = 0f
     private val overRegen = RectF()
     private val overMenu = RectF()
     private var overAnim = 0f
@@ -409,7 +417,9 @@ class GameView(ctx: Context) : View(ctx) {
         val botPad = u * 0.9f
         var rows = ((h - topPad - botPad) / s).toInt()
         if (rows % 2 == 0) rows--
-        val g = Game(COLS, rows)
+        // Heroico y Legendario: cuadrícula más corta (2 filas menos por lado), centrada igual
+        if (diff > 0) rows -= 4
+        val g = Game(COLS, rows, diff)
         g.baseSpeed = w * 0.105f / s
         game = g
         ox = 0f
@@ -459,7 +469,12 @@ class GameView(ctx: Context) : View(ctx) {
             for (i in 0 until 2) gfxRect[i].set(l + i * (g2 + u * 0.15f), gy, l + i * (g2 + u * 0.15f) + g2, gy + u * 1.0f)
         }
         applyRefresh()
-        escapeRect.set(w / 2f - u * 4.4f, h * 0.785f, w / 2f + u * 4.4f, h * 0.785f + u * 2.0f)
+        escapeRect.set(w / 2f - u * 4.4f, h * 0.765f, w / 2f + u * 4.4f, h * 0.765f + u * 2.0f)
+        run {
+            val bw = u * 2.75f; val gp = u * 0.2f
+            val x0 = w / 2f - (3 * bw + 2 * gp) / 2f
+            for (i in 0 until 3) diffRect[i].set(x0 + i * (bw + gp), escapeRect.bottom + u * 0.45f, x0 + i * (bw + gp) + bw, escapeRect.bottom + u * 1.3f)
+        }
         val tb = topInset + u * 0.9f
         val sw5 = (w - u * 0.8f - 4 * u * 0.12f) / 5f
         for (i in 0 until 5) {
@@ -763,7 +778,7 @@ class GameView(ctx: Context) : View(ctx) {
         msgT = max(0f, msgT - dt)
         if (phase == -1) {
             travelT += dt
-            if (loaded && travelT > T_SYS - 0.6f && approachT < 0f) approachT = 0f
+            if (loaded && travelT >= T_SYS && approachT < 0f) approachT = 0f
             if (approachT >= 0f) approachT += dt
             if (approachT >= APPROACH) { phase = 0; phaseT = 0f; loadFade = 1f }
         }
@@ -876,7 +891,7 @@ class GameView(ctx: Context) : View(ctx) {
         if (phase == 2) drawEventBack(canvas)
         if (phase == -1 && approachT >= 0f) {
             val e = (approachT / APPROACH).coerceIn(0f, 1f)
-            planetSc = MENU_SC * (0.04f + 0.96f * e * e * (3f - 2f * e))
+            planetSc = MENU_SC * (APPROACH_SC0 + (1f - APPROACH_SC0) * e * e * (3f - 2f * e))
         }
         if (phase >= 0 || approachT >= 0f) drawPlanet(canvas, g)
         if (phase == 2 && evKind == 3) drawEclipse(canvas)
@@ -912,8 +927,29 @@ class GameView(ctx: Context) : View(ctx) {
         }
         if (pauseAnim > 0.01f) drawPause(canvas)
         if (phase == 2 && settingsAnim > 0.01f) drawSettings(canvas)
+        if (phase == 2 && diff == 2 && !g.over) drawOcclusion(canvas)
         if (phase >= 0) drawStatusBar(canvas)
         scheduleFrame()
+    }
+
+    /** Legendario: ráfagas rápidas que tapan parte de la pantalla (humo, polvo o destellos), sobre todo en eventos. */
+    private fun drawOcclusion(c: Canvas) {
+        val rate = if (evKind >= 0) 0.35f else 0.08f
+        if (occl <= 0f && !paused && Random.nextFloat() < frameDt * rate) {
+            occl = 1.1f; occlX = width * (0.15f + Random.nextFloat() * 0.7f); occlY = height * (0.2f + Random.nextFloat() * 0.6f)
+        }
+        if (occl <= 0f) return
+        occl = max(0f, occl - frameDt)
+        val k = kotlin.math.sin((1.1f - occl) / 1.1f * PI.toFloat())
+        val pt = puffTex ?: return
+        for (j in 0 until 4) {
+            val r = width * (0.28f + 0.1f * j) * (0.7f + 0.5f * k)
+            val dx = cos(j * 1.7f + time) * width * 0.08f; val dy = sin(j * 2.3f) * width * 0.08f
+            rect.set(occlX + dx - r, occlY + dy - r, occlX + dx + r, occlY + dy + r)
+            val pnt = if (evKind == 1) hotPaint else smokePaint
+            pnt.alpha = (200 * k).toInt().coerceIn(0, 255)
+            c.save(); c.rotate(j * 60f + time * 20f, occlX, occlY); c.drawBitmap(pt[j % pt.size], null, rect, pnt); c.restore()
+        }
     }
 
     /** Hora y batería, pequeñas, en la orilla superior de la pantalla. */
@@ -1353,10 +1389,13 @@ class GameView(ctx: Context) : View(ctx) {
             c.drawBitmap(pd.bmp, null, rect, bmpPaint)
             // en el menú la superficie gira sobre su eje vertical con la luz fija; al explotar queda la textura completa
             val spn = spinner
-            if (spn != null && phase <= 0 && si == spinSkin) {
+            if (spn != null && phase == 0 && si == spinSkin) {
                 val dr = planetR * 0.93f
                 rect.set(ccx - dr, ccy - dr, ccx + dr, ccy + dr)
-                synchronized(spn.bmp) { c.drawBitmap(spn.bmp, null, rect, bmpPaint) }
+                // aparece poco a poco al terminar la llegada, para que no haya salto
+                objPaint.alpha = (255 * (1f - loadFade)).toInt().coerceIn(0, 255)
+                synchronized(spn.bmp) { c.drawBitmap(spn.bmp, null, rect, objPaint) }
+                objPaint.alpha = 255
                 rect.set(ccx - planetR, ccy - planetR, ccx + planetR, ccy + planetR)
             }
             // nubes que giran despacio (dos capas en sentidos opuestos), solo sobre el disco del planeta
@@ -1753,21 +1792,58 @@ class GameView(ctx: Context) : View(ctx) {
         }
         for (layer in 0..2) drawShipSprite(c, sp, p.type, p.rot, p.cells, p.fx, p.fy, layer, hover)
         c.restore()
-        if (p.bomb) {
-            val pulse = 0.6f + 0.4f * sin(time * 9f)
-            paint.style = Paint.Style.STROKE
-            paint.strokeWidth = s * 0.08f
-            paint.color = Color.argb((220 * pulse).toInt(), 110, 190, 255)
-            c.drawCircle(bcx, bcy, s * 2.2f, paint)
-            paint.style = Paint.Style.FILL
-            paint.color = Color.rgb(40, 120, 255)
-            c.drawCircle(bcx, bcy, s * 0.42f, paint)
-            paint.color = Color.WHITE
-            paint.textAlign = Paint.Align.CENTER
-            paint.typeface = Typeface.DEFAULT_BOLD
-            paint.textSize = s * 0.6f
-            c.drawText("!", bcx, bcy + s * 0.21f, paint)
+        if (p.bomb) drawPlasmaCore(c, bcx, bcy)
+        for (fp in g.free) drawFreePiece(c, sp, fp)
+    }
+
+    /** Granada de plasma adherida: núcleo azul que late, filamentos girando y chispas eléctricas. */
+    private fun drawPlasmaCore(c: Canvas, x: Float, y: Float) {
+        val beat = 0.5f + 0.5f * sin(time * 14f)
+        val pl = plasmaTex
+        if (pl != null) {
+            for (k in 0 until 2) {
+                val r = s * (1.1f + 0.25f * beat) * (1f - 0.3f * k)
+                c.save(); c.rotate(time * (if (k == 0) 220f else -300f), x, y)
+                rect.set(x - r, y - r, x + r, y + r)
+                bluePaint.alpha = (230 - 60 * k).coerceIn(0, 255)
+                c.drawBitmap(pl, null, rect, bluePaint)
+                c.restore()
+            }
         }
+        val st = sprSteel; val wh = sprWhite
+        if (st != null && wh != null) {
+            var r = s * (0.9f + 0.4f * beat)
+            rect.set(x - r, y - r, x + r, y + r); addPaint.alpha = 210; c.drawBitmap(st, null, rect, addPaint)
+            r = s * (0.28f + 0.12f * beat)
+            rect.set(x - r, y - r, x + r, y + r); addPaint.alpha = 255; c.drawBitmap(wh, null, rect, addPaint)
+        }
+        // arcos eléctricos cortos alrededor
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = s * 0.05f
+        paint.color = Color.argb(200, 170, 220, 255)
+        for (k in 0 until 3) {
+            val a0 = time * 9f + k * 2.1f + (Random.nextFloat() - 0.5f) * 0.6f
+            val r0 = s * 0.4f; val r1 = s * (0.9f + Random.nextFloat() * 0.4f)
+            path.reset()
+            path.moveTo(x + cos(a0) * r0, y + sin(a0) * r0)
+            val am = a0 + (Random.nextFloat() - 0.5f) * 0.5f
+            path.lineTo(x + cos(am) * (r0 + r1) / 2f, y + sin(am) * (r0 + r1) / 2f)
+            path.lineTo(x + cos(a0 + 0.2f) * r1, y + sin(a0 + 0.2f) * r1)
+            c.drawPath(path, paint)
+        }
+        paint.style = Paint.Style.FILL
+    }
+
+    /** Naves que siguen solas (modo Legendario): se ven igual pero sin control ni guía. */
+    private fun drawFreePiece(c: Canvas, sp: Array<Bitmap>, fp: Piece) {
+        for (layer in 0..2) drawShipSprite(c, sp, fp.type, fp.rot, fp.cells, fp.fx, fp.fy, layer, LIFT_PIECE)
+        val fa = flameA ?: return
+        var ax = 0f; var ay = 0f
+        for (cl in fp.cells) { ax += cl[0]; ay += cl[1] }
+        val bx = ox + (fp.fx + ax / 4f + 0.5f) * s
+        val by = oy + (fp.fy + ay / 4f + 0.5f) * s - fp.dirY * s * 1.4f
+        val r = s * 0.8f * (0.8f + 0.2f * sin(time * 29f))
+        rect.set(bx - r, by - r, bx + r, by + r); addPaint.alpha = 140; c.drawBitmap(fa, null, rect, addPaint)
     }
 
     private fun proj(v: Float, center: Float, lift: Float) =
@@ -1855,7 +1931,7 @@ class GameView(ctx: Context) : View(ctx) {
     private fun startEvent() {
         evKind = Random.nextInt(evNames.size)
         evT = 0f
-        evTimer = EV_DUR + 20f + Random.nextFloat() * 25f
+        evTimer = if (diff == 2) EV_DUR + 5f + Random.nextFloat() * 8f else EV_DUR + 20f + Random.nextFloat() * 25f
         evX = width * (0.2f + Random.nextFloat() * 0.6f)
         evY = height * (0.15f + Random.nextFloat() * 0.2f)
         evFleet.clear()
@@ -2696,7 +2772,7 @@ class GameView(ctx: Context) : View(ctx) {
      */
     private fun drawTravel(c: Canvas, alpha: Float) {
         val w = width.toFloat(); val h = height.toFloat()
-        val cx = w / 2f; val cy = h * 0.45f
+        val cx = ccx; val cy = ccy
         val dt = frameDt
         val al = alpha.coerceIn(0f, 1f)
         val arrive = if (approachT >= 0f) (approachT / APPROACH).coerceIn(0f, 1f) else 0f
@@ -2711,6 +2787,15 @@ class GameView(ctx: Context) : View(ctx) {
         paint.shader = null
         paint.color = Color.argb((255 * al * (1f - arrive * 0.85f)).toInt(), 2, 3, 10)
         c.drawRect(0f, 0f, w, h, paint)
+        // durante la llegada el planeta se dibuja aquí también, así no queda tapado por el fondo del viaje
+        if (approachT >= 0f) {
+            val pd0 = cache[skinSel]
+            if (pd0 != null) {
+                val r0 = planetR * planetSc
+                rect.set(ccx - r0, ccy - r0, ccx + r0, ccy + r0)
+                c.drawBitmap(pd0.bmp, null, rect, bmpPaint)
+            }
+        }
         if (travelGalaxy == null) travelGalaxy = try {
             val dir = context.cacheDir
             DiskCache.loadNamed(dir, "galaxy_travel") ?: Textures.makeTravelGalaxy(448).also { b -> saveAsync { DiskCache.saveNamed(dir, "galaxy_travel", b) } }
@@ -2825,7 +2910,7 @@ class GameView(ctx: Context) : View(ctx) {
             if (approachT < 0f) {
                 // nuestro planeta con su textura real (si ya cargó), pequeño y creciendo
                 val pd = cache[skinSel]
-                val pr = u * (0.15f + 0.9f * e3)
+                val pr = planetR * MENU_SC * APPROACH_SC0 * (0.15f + 0.85f * e3)
                 val pa = (al * 255 * (s3 / 0.4f).coerceIn(0f, 1f)).toInt().coerceIn(0, 255)
                 if (pd != null) {
                     rect.set(cx - pr, cy - pr, cx + pr, cy + pr)
@@ -3278,6 +3363,24 @@ class GameView(ctx: Context) : View(ctx) {
         paint.setShadowLayer(u * 0.12f, 0f, u * 0.05f, Color.argb((160 * a).toInt(), 60, 0, 0))
         c.drawText(if (ok) "ESCAPAR" else "Cargando...", width / 2f, er.centerY() + u * 0.33f, paint)
         paint.clearShadowLayer()
+        // burbujas de dificultad
+        val dn = arrayOf("Normal", "Heroico", "Legendario")
+        val dc = intArrayOf(Color.rgb(60, 140, 230), Color.rgb(230, 150, 40), Color.rgb(200, 40, 60))
+        for (i in 0 until 3) {
+            val r = diffRect[i]
+            val sel = i == diff
+            val rr = r.height() / 2f
+            paint.style = Paint.Style.FILL
+            paint.color = if (sel) Color.argb(al, Color.red(dc[i]), Color.green(dc[i]), Color.blue(dc[i])) else Color.argb((150 * a).toInt(), 14, 18, 40)
+            c.drawRoundRect(r, rr, rr, paint)
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = if (sel) 3f else 2f
+            paint.color = Color.argb(((if (sel) 255 else 140) * a).toInt(), Color.red(dc[i]), Color.green(dc[i]), Color.blue(dc[i]))
+            c.drawRoundRect(r, rr, rr, paint)
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(al, 255, 255, 255)
+            paint.textSize = u * 0.36f
+            c.drawText(dn[i], r.centerX(), r.centerY() + u * 0.13f, paint)
+        }
     }
 
     private fun cardX(i: Int) = u * 0.4f + carouselOff + i * (cardW + gap)
@@ -4323,6 +4426,12 @@ class GameView(ctx: Context) : View(ctx) {
                         if (achIcon.contains(sx, sy) && achIcon.contains(e.x, e.y)) achOpen = !achOpen
                         else if (achOpen) achOpen = false
                         else if (escapeRect.contains(sx, sy) && escapeRect.contains(e.x, e.y)) startEscape()
+                        else for (i in 0 until 3) if (diffRect[i].contains(sx, sy) && diffRect[i].contains(e.x, e.y) && diff != i) {
+                            diff = i
+                            try { prefs.edit().putInt("diff", i).apply() } catch (ex: Exception) { }
+                            layoutGame()
+                            say(arrayOf("Normal: como siempre", "Heroico: cuadrícula más corta y sin naves bomba", "Legendario: naves cada 2 segundos sin esperar")[i])
+                        }
                     } else if (tab == 2) {
                         if (!moved && nameRect.contains(e.x, e.y)) editPilotName()
                     } else {

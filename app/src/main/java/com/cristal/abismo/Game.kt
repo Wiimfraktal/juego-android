@@ -16,6 +16,10 @@ class Piece(val type: Int, var cells: Array<IntArray>, var px: Int, var py: Int)
     var rot = 0
     /** Nave bomba: al fijarse explota y destruye las naves cercanas. */
     var bomb = false
+    /** Para naves sueltas (modo Legendario): dirección propia, reloj de avance y tiempo de contacto. */
+    var dirY = 0
+    var fallT = 0f
+    var contactT = 0f
 }
 
 /** Nave ya colocada: se guarda entera para dibujarla completa y para moverla con la gravedad. */
@@ -53,7 +57,14 @@ object Shapes {
  * avanzan hacia afuera (en eje o en diagonal, según dónde estén). El jugador las empuja celda a celda
  * en cualquier dirección, pero nunca puede acercarlas al centro; sí puede orbitar alrededor.
  */
-class Game(val cols: Int, val rows: Int) {
+/** diff: 0 Normal, 1 Heroico (sin bombas), 2 Legendario (sin bombas y naves que salen cada 2 s sin esperar). */
+class Game(val cols: Int, val rows: Int, val diff: Int = 0) {
+    /** Naves que siguen su camino solas mientras controlas la nueva (solo Legendario). */
+    val free = ArrayList<Piece>()
+    private var legendT = 0f
+    private var bombRun = 0
+    private var bombRunUp = 0
+    private var bombRunDown = 0
     val cx = cols / 2
     val cy = rows / 2
     val grid = Array(rows) { IntArray(cols) }
@@ -134,7 +145,11 @@ class Game(val cols: Int, val rows: Int) {
         gy = if (Random.nextBoolean()) 1 else -1
         spawnY = if (gy < 0) cy + 1 else cy - 2
         val p = Piece(t, Array(4) { Shapes.all[t][it].copyOf() }, cx, spawnY)
-        p.bomb = Random.nextFloat() < (if (level >= 2) 0.15f else 0.1f)
+        // bombas: 10 %, como máximo 2 seguidas en el mismo sentido y 4 seguidas en total; nunca en Heroico/Legendario
+        var bomb = diff == 0 && Random.nextFloat() < 0.10f
+        if (bomb && (bombRun >= 4 || (if (gy < 0) bombRunUp else bombRunDown) >= 2)) bomb = false
+        if (bomb) { bombRun++; if (gy < 0) bombRunUp++ else bombRunDown++ } else { bombRun = 0; bombRunUp = 0; bombRunDown = 0 }
+        p.bomb = bomb
         piece = p
         contact = 0f; blocked = false; fallT = 0f; progMax = 0; accX = 0f; accY = 0f
         if (collides(p.cells, p.px, p.py)) over = true
@@ -247,6 +262,8 @@ class Game(val cols: Int, val rows: Int) {
             sh.vy = if (abs(sh.vy) <= st) 0f else sh.vy - Math.signum(sh.vy) * st
         }
         if (over) { overTime += dt; return }
+        if (diff == 2) updateFree(dt)
+        if (over) return
         val p = piece ?: return
         // lenta al nacer y cada vez más rápida hacia el borde
         val frac = max(0, prog(p.py)) / (rows / 2f)
@@ -276,8 +293,48 @@ class Game(val cols: Int, val rows: Int) {
         } else contact = 0f
     }
 
+    /** Legendario: cada 2 s la nave actual sigue sola y aparece otra; las sueltas avanzan y se fijan al chocar. */
+    private fun updateFree(dt: Float) {
+        legendT += dt
+        val cur = piece
+        if (legendT >= 2f && cur != null) {
+            legendT = 0f
+            cur.dirY = gy
+            cur.fallT = 0f; cur.contactT = 0f
+            free.add(cur)
+            piece = null
+            spawn()
+        }
+        val interval = 1f / speed()
+        val it = free.iterator()
+        val done = ArrayList<Piece>()
+        while (it.hasNext()) {
+            val fp = it.next()
+            fp.fallT += dt
+            if (fp.fallT >= interval) {
+                fp.fallT -= interval
+                if (!collides(fp.cells, fp.px, fp.py + fp.dirY)) { fp.py += fp.dirY; fp.contactT = 0f } else fp.contactT += interval
+            }
+            if (collides(fp.cells, fp.px, fp.py + fp.dirY)) { fp.contactT += dt }
+            fp.fx += (fp.px - fp.fx) * min(1f, dt * 16f)
+            fp.fy += (fp.py - fp.fy) * min(1f, dt * 16f)
+            if (fp.contactT > 0.25f) { it.remove(); done.add(fp) }
+        }
+        for (fp in done) {
+            // si otra nave ocupó su lugar mientras tanto, retrocede hasta un hueco libre
+            var guard = 0
+            while (collides(fp.cells, fp.px, fp.py) && guard++ < 6) fp.py -= fp.dirY
+            lockPiece(fp, false)
+            if (over) return
+        }
+    }
+
     private fun lock() {
         val p = piece ?: return
+        lockPiece(p, true)
+    }
+
+    private fun lockPiece(p: Piece, controlled: Boolean) {
         locks++
         var danger = false
         val id = nextId++
@@ -291,7 +348,7 @@ class Game(val cols: Int, val rows: Int) {
             if (abs(y - cy) <= ZONE) danger = true
         }
         placed[id] = Placed(id, p.type, p.rot, p.px, p.py)
-        piece = null
+        if (controlled) piece = null
         if (p.bomb) { detonate(id, p); danger = false }
         val n = clearLines()
         if (n > 0) { streak++; bestStreak = max(bestStreak, streak); clearEvents.add(n) }
@@ -303,10 +360,10 @@ class Game(val cols: Int, val rows: Int) {
         }
         score += 10
         if (danger && n == 0) {
-            if (shields > 0) { shields--; clearBand(ZONE + 3); shieldEvents++; spawn(); return }
+            if (shields > 0) { shields--; clearBand(ZONE + 3); shieldEvents++; if (controlled) spawn(); return }
             over = true; return
         }
-        spawn()
+        if (controlled) spawn()
     }
 
     /** Explosión de la nave bomba: destruye las naves con alguna celda a 2 casillas o menos. */
@@ -354,6 +411,7 @@ class Game(val cols: Int, val rows: Int) {
     /** Regeneración: limpia la franja central (y 3 filas más) y la partida sigue donde se quedó. */
     fun revive() {
         if (!over) return
+        free.clear()
         clearBand(ZONE + 3)
         over = false
         overTime = 0f
