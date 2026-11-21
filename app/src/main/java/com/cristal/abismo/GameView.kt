@@ -61,7 +61,7 @@ class GameView(ctx: Context) : View(ctx) {
     ) { var t = 0f }
 
     private companion object {
-        const val COLS = 21
+        const val COLS = 19
         const val LIFT_LOCKED = 0.30f
         const val LIFT_PIECE = 0.55f
         const val EXPLOSION_TIME = 4.6f
