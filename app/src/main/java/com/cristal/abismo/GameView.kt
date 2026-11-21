@@ -253,6 +253,8 @@ class GameView(ctx: Context) : View(ctx) {
     private val puBuy = Array(2) { RectF() }
     private val soonRect = RectF()
     private val tabRect3 = RectF()
+    private val gameGear = RectF()
+    private var settingsFromGame = false
     private val overRegen = RectF()
     private val overMenu = RectF()
     private var overAnim = 0f
@@ -440,6 +442,7 @@ class GameView(ctx: Context) : View(ctx) {
         barY0 = top + u * 0.35f
         barY1 = barY0 + u * 0.42f
         pauseRect.set(w / 2f - u * 0.7f, top - u * 0.75f, w / 2f + u * 0.7f, top + u * 0.3f)
+        gameGear.set(w / 2f + u * 0.75f, top - u * 0.75f, w / 2f + u * 1.85f, top + u * 0.35f)
         resumeRect.set(w / 2f - u * 3f, h / 2f + u * 0.2f, w / 2f + u * 3f, h / 2f + u * 1.6f)
         menuRect.set(w / 2f - u * 3.6f, h / 2f + u * 2.0f, w / 2f + u * 3.6f, h / 2f + u * 3.3f)
         panelRect.set(u * 0.9f, h / 2f - u * 4.8f, w - u * 0.9f, h / 2f + u * 6.0f)
@@ -894,6 +897,7 @@ class GameView(ctx: Context) : View(ctx) {
         if (phase == 2) {
             drawChips(canvas)
             drawHud(canvas, g)
+            if (!g.over) drawGear(canvas, 0.9f, gameGear)
             drawMedals(canvas)
             drawEventBanner(canvas)
         } else if (phase == -1) drawLoading(canvas)
@@ -907,6 +911,7 @@ class GameView(ctx: Context) : View(ctx) {
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
         }
         if (pauseAnim > 0.01f) drawPause(canvas)
+        if (phase == 2 && settingsAnim > 0.01f) drawSettings(canvas)
         if (phase >= 0) drawStatusBar(canvas)
         scheduleFrame()
     }
@@ -3102,9 +3107,9 @@ class GameView(ctx: Context) : View(ctx) {
         when (t) { 0 -> { drawPlayTab(c, a); drawAchWidget(c, a) }; 1 -> drawSkinTab(c, a); 3 -> drawPowerTab(c, a); else -> drawProfileTab(c, a) }
     }
 
-    private fun drawGear(c: Canvas, a: Float) {
-        val cx = gearC.centerX()
-        val cy = gearC.centerY()
+    private fun drawGear(c: Canvas, a: Float, at: RectF = gearC) {
+        val cx = at.centerX()
+        val cy = at.centerY()
         val r = u * 0.42f
         paint.style = Paint.Style.FILL
         paint.color = Color.argb((150 * a).toInt(), 10, 14, 34)
@@ -4268,7 +4273,12 @@ class GameView(ctx: Context) : View(ctx) {
                 val tx = e.x - sx
                 val ty = e.y - sy
                 val dist = hypot(tx, ty)
-                if (phase == 0 && settingsOpen) {
+                if (phase == 2 && !settingsOpen && !g.over && gameGear.contains(sx, sy) && gameGear.contains(e.x, e.y)) {
+                    // configuración en plena partida: se pausa mientras está abierta
+                    settingsOpen = true; settingsFromGame = !paused; paused = true
+                    return true
+                }
+                if ((phase == 0 || phase == 2) && settingsOpen) {
                     if (musicSw.contains(e.x, e.y)) {
                         music.turn(!music.enabled)
                         try { prefs.edit().putBoolean("music", music.enabled).apply() } catch (ex: Exception) { }
@@ -4286,7 +4296,10 @@ class GameView(ctx: Context) : View(ctx) {
                     } else if (gfxRect.any { it.contains(e.x, e.y) }) {
                         gfxMode = gfxRect.indexOfFirst { it.contains(e.x, e.y) }
                         try { prefs.edit().putInt("gfx", gfxMode).apply() } catch (ex: Exception) { }
-                    } else if (closeRect.contains(e.x, e.y) || !panelRect.contains(e.x, e.y)) settingsOpen = false
+                    } else if (closeRect.contains(e.x, e.y) || !panelRect.contains(e.x, e.y)) {
+                        settingsOpen = false
+                        if (phase == 2 && settingsFromGame) { paused = false; settingsFromGame = false; last = 0L }
+                    }
                 } else if (phase == 0 && palPick >= 0) {
                     paletteTap(e.x, e.y)
                 } else if (phase == 0) {
