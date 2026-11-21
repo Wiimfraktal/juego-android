@@ -114,15 +114,18 @@ object DiskCache {
 
     /** Naves completas de una facción (28 sprites) en un solo archivo. */
     fun loadSprites(dir: File, fac: Int, n: Int): Array<Bitmap>? {
-        val arr = loadRaw(file(dir, "spr_$fac.bin"))
+        val arr = loadRaw(file(dir, "spr_${fac}_$spriteTag.bin"))
         if (arr == null || arr.size != n) return null
         for (b in arr) b.setHasMipMap(true)
         return arr
     }
 
-    fun saveSprites(dir: File, fac: Int, arr: Array<Bitmap>) = saveRaw(file(dir, "spr_$fac.bin"), arr)
+    fun saveSprites(dir: File, fac: Int, arr: Array<Bitmap>) = saveRaw(file(dir, "spr_${fac}_$spriteTag.bin"), arr)
 
-    fun hasSprites(dir: File, fac: Int) = file(dir, "spr_$fac.bin").exists()
+    fun hasSprites(dir: File, fac: Int) = file(dir, "spr_${fac}_$spriteTag.bin").exists()
+
+    /** Resolución de las naves en el nombre del archivo (cambia con la opción Calidad/Rendimiento). */
+    @Volatile var spriteTag = 96
 
     fun loadNamed(dir: File, name: String): Bitmap? = loadAny(dir, name)
 

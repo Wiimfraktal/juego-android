@@ -70,6 +70,9 @@ class GameView(ctx: Context) : View(ctx) {
         const val PULL = 2.5f      // duración del alejamiento
         const val MENU_SC = 1.9f
         const val APPROACH = 1.6f
+        const val T_GAL = 2.3f
+        const val T_THRU = 4.0f
+        const val T_SYS = 6.4f
         const val ESC0 = 1.4f
         const val EV_DUR = 26f
         const val LAUNCH = 0.75f
@@ -182,6 +185,54 @@ class GameView(ctx: Context) : View(ctx) {
     private val sfxSw = RectF()
     private val closeRect = RectF()
     private var settingsOpen = false
+    /** Cuadros por segundo: 0 = 120, 1 = 60, 2 = ahorro (30). */
+    private var fpsMode = try { prefs.getInt("fps", 1).coerceIn(0, 2) } catch (e: Exception) { 1 }
+    /** Gráficos: 0 = calidad (texturas más nítidas y todos los efectos), 1 = rendimiento. */
+    private var gfxMode = try { prefs.getInt("gfx", 0).coerceIn(0, 1) } catch (e: Exception) { 0 }
+    private val gfxAtStart = gfxMode
+    private val fpsRect = Array(3) { RectF() }
+    private val gfxRect = Array(2) { RectF() }
+    private var framePosted = false
+    private var lastFrameNs = 0L
+    private val frameCb = object : android.view.Choreographer.FrameCallback {
+        override fun doFrame(t: Long) {
+            framePosted = false
+            val interval = when (fpsMode) { 0 -> 8_000_000L; 1 -> 16_000_000L; else -> 32_500_000L }
+            if (t - lastFrameNs >= interval) { lastFrameNs = t; invalidate() } else scheduleFrame()
+        }
+    }
+
+    /** Pide el siguiente cuadro alineado a la pantalla, respetando el límite de FPS elegido. */
+    private fun scheduleFrame() {
+        if (framePosted) return
+        framePosted = true
+        try { android.view.Choreographer.getInstance().postFrameCallback(frameCb) } catch (e: Throwable) { framePosted = false; postInvalidateOnAnimation() }
+    }
+
+    /** Pide a la pantalla la frecuencia adecuada (120 Hz si la hay, o 60 Hz para ahorrar). */
+    private fun applyRefresh() {
+        try {
+            val act = context as? android.app.Activity ?: return
+            val win = act.window
+            val lp = win.attributes
+            val target = if (fpsMode == 0) 120f else 60f
+            if (android.os.Build.VERSION.SDK_INT >= 23) {
+                val d = act.windowManager.defaultDisplay
+                val curMode = d.mode
+                val modes = d.supportedModes.filter { it.physicalWidth == curMode.physicalWidth && it.physicalHeight == curMode.physicalHeight }
+                val best = modes.minByOrNull { kotlin.math.abs(it.refreshRate - target) + (if (it.refreshRate < target - 1f && fpsMode == 0) 1000f else 0f) }
+                if (best != null) lp.preferredDisplayModeId = best.modeId
+            }
+            lp.preferredRefreshRate = target
+            win.attributes = lp
+        } catch (e: Throwable) { }
+    }
+
+    // indicador de batería y hora
+    private var battPct = -1
+    private var battCharging = false
+    private var battReadT = 0f
+    private val clockFmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
     private var settingsAnim = 0f
     private var pauseAnim = 0f
     private var prevTab = 0
@@ -370,12 +421,21 @@ class GameView(ctx: Context) : View(ctx) {
         pauseRect.set(w / 2f - u * 0.7f, top - u * 0.75f, w / 2f + u * 0.7f, top + u * 0.3f)
         resumeRect.set(w / 2f - u * 3f, h / 2f + u * 0.2f, w / 2f + u * 3f, h / 2f + u * 1.6f)
         menuRect.set(w / 2f - u * 3.6f, h / 2f + u * 2.0f, w / 2f + u * 3.6f, h / 2f + u * 3.3f)
-        panelRect.set(u * 1.2f, h / 2f - u * 3.2f, w - u * 1.2f, h / 2f + u * 4.8f)
+        panelRect.set(u * 0.9f, h / 2f - u * 4.8f, w - u * 0.9f, h / 2f + u * 6.0f)
         musicSw.set(panelRect.left + u * 0.6f, panelRect.top + u * 1.9f, panelRect.right - u * 0.6f, panelRect.top + u * 3.0f)
         sfxSw.set(panelRect.left + u * 0.6f, panelRect.top + u * 3.3f, panelRect.right - u * 0.6f, panelRect.top + u * 4.4f)
         voiceSw.set(panelRect.left + u * 0.6f, panelRect.top + u * 4.7f, panelRect.right - u * 0.6f, panelRect.top + u * 5.8f)
-        closeRect.set(w / 2f - u * 2.2f, panelRect.bottom - u * 1.8f, w / 2f + u * 2.2f, panelRect.bottom - u * 0.6f)
-        escapeRect.set(w / 2f - u * 3.6f, h * 0.80f, w / 2f + u * 3.6f, h * 0.80f + u * 1.6f)
+        closeRect.set(w / 2f - u * 2.2f, panelRect.bottom - u * 1.6f, w / 2f + u * 2.2f, panelRect.bottom - u * 0.5f)
+        run {
+            val l = panelRect.left + u * 0.6f; val r = panelRect.right - u * 0.6f
+            val fy = panelRect.top + u * 7.0f; val gy = panelRect.top + u * 8.75f
+            val g3 = (r - l - u * 0.3f) / 3f
+            for (i in 0 until 3) fpsRect[i].set(l + i * (g3 + u * 0.15f), fy, l + i * (g3 + u * 0.15f) + g3, fy + u * 1.0f)
+            val g2 = (r - l - u * 0.15f) / 2f
+            for (i in 0 until 2) gfxRect[i].set(l + i * (g2 + u * 0.15f), gy, l + i * (g2 + u * 0.15f) + g2, gy + u * 1.0f)
+        }
+        applyRefresh()
+        escapeRect.set(w / 2f - u * 4.4f, h * 0.785f, w / 2f + u * 4.4f, h * 0.785f + u * 2.0f)
         val tb = topInset + u * 0.9f
         val sw5 = (w - u * 0.8f - 4 * u * 0.12f) / 5f
         for (i in 0 until 5) {
@@ -509,10 +569,10 @@ class GameView(ctx: Context) : View(ctx) {
     private val cloudPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
     /** Resolución del planeta equipado (más píxeles que en pantalla para el acercamiento), con tope de 2048 px. */
-    private fun planetRes() = min((planetR * 2.3f).toInt(), 1024)
-    private fun previewRes() = (planetR * 1.0f).toInt()
+    private fun planetRes() = if (gfxAtStart == 0) min((planetR * 2.7f).toInt(), 1200) else min((planetR * 1.7f).toInt(), 760)
+    private fun previewRes() = (planetR * (if (gfxAtStart == 0) 1.1f else 0.85f)).toInt()
     /** Píxeles por celda de las naves: ~2× el tamaño en pantalla, entre 96 y 128. */
-    private fun spriteCp() = ((s * 1.9f).toInt() / 8 * 8).coerceIn(96, 128)
+    private fun spriteCp() = if (gfxAtStart == 0) ((s * 2.3f).toInt() / 8 * 8).coerceIn(112, 144) else 96
 
     private fun cachedTex(dir: java.io.File, name: String, make: () -> Bitmap): Bitmap =
         DiskCache.loadNamed(dir, name) ?: make().also { b -> saveAsync { DiskCache.saveNamed(dir, name, b) } }
@@ -530,6 +590,7 @@ class GameView(ctx: Context) : View(ctx) {
         val pr = planetRes()
         val prv = previewRes()
         val cp = spriteCp()
+        DiskCache.spriteTag = cp
         val thumbR = (u * 1.3f).toInt()
         val plW = (u * 10f).toInt(); val plH = (u * 1.5f).toInt()
         val dir = context.cacheDir
@@ -547,6 +608,7 @@ class GameView(ctx: Context) : View(ctx) {
                 val pd = DiskCache.loadPlanet(dir, sel, pr)
                     ?: Textures.makePlanet(pr, skins[sel]).also { saveAsync { DiskCache.savePlanet(dir, sel, pr, it) } }
                 if (!raw && cache[sel] == null) saveAsync { DiskCache.savePlanet(dir, sel, pr, pd) }
+                pd.bmp.setHasMipMap(true)
                 cache[sel] = pd
                 fullRes[sel] = true
                 thumbs[sel] = Bitmap.createScaledBitmap(pd.bmp, thumbR * 2, thumbR * 2, true)
@@ -577,6 +639,7 @@ class GameView(ctx: Context) : View(ctx) {
             for (i in previews) tasks.add(0.6f to {
                 val p = DiskCache.loadPlanet(dir, i, prv)
                     ?: Textures.makePlanet(prv, skins[i], lite = true).also { saveAsync { DiskCache.savePlanet(dir, i, prv, it) } }
+                p.bmp.setHasMipMap(true)
                 if (cache[i] == null) cache[i] = p
                 thumbs[i] = Bitmap.createScaledBitmap(p.bmp, thumbR * 2, thumbR * 2, true)
             })
@@ -636,6 +699,7 @@ class GameView(ctx: Context) : View(ctx) {
                 ?: Textures.makePlanet(pr, skins[i]).also { saveAsync { DiskCache.savePlanet(dir, i, pr, it) } }
             // la equipada se guarda en binario para que el próximo inicio sea más rápido
             if (!raw) saveAsync { DiskCache.savePlanet(dir, i, pr, pd) }
+            pd.bmp.setHasMipMap(true)
             cache[i] = pd
             try { prepareSpinner(dir, i) } catch (e: Throwable) { }
             postInvalidate()
@@ -651,7 +715,7 @@ class GameView(ctx: Context) : View(ctx) {
             // un fallo de un cuadro no cierra el juego: se descarta y se sigue con el siguiente
             try { canvas.restoreToCount(sc) } catch (x: Throwable) { }
             android.util.Log.e("FugaOrbital", "cuadro", e)
-            postInvalidateOnAnimation()
+            scheduleFrame()
         }
     }
 
@@ -664,7 +728,7 @@ class GameView(ctx: Context) : View(ctx) {
         msgT = max(0f, msgT - dt)
         if (phase == -1) {
             travelT += dt
-            if (loaded && travelT > 3.2f && approachT < 0f) approachT = 0f
+            if (loaded && travelT > T_SYS - 0.6f && approachT < 0f) approachT = 0f
             if (approachT >= 0f) approachT += dt
             if (approachT >= APPROACH) { phase = 0; phaseT = 0f; loadFade = 1f }
         }
@@ -809,7 +873,49 @@ class GameView(ctx: Context) : View(ctx) {
             canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), paint)
         }
         if (pauseAnim > 0.01f) drawPause(canvas)
-        postInvalidateOnAnimation()
+        if (phase >= 0) drawStatusBar(canvas)
+        scheduleFrame()
+    }
+
+    /** Hora y batería, pequeñas, en la orilla superior de la pantalla. */
+    private fun drawStatusBar(c: Canvas) {
+        battReadT -= frameDt
+        if (battReadT <= 0f) {
+            battReadT = 20f
+            try {
+                val it2 = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                if (it2 != null) {
+                    val lv = it2.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                    val sc = it2.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, 100)
+                    battPct = if (lv >= 0 && sc > 0) lv * 100 / sc else -1
+                    val st = it2.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+                    battCharging = st == android.os.BatteryManager.BATTERY_STATUS_CHARGING || st == android.os.BatteryManager.BATTERY_STATUS_FULL
+                }
+            } catch (e: Exception) { }
+        }
+        val y = max(u * 0.42f, topInset * 0.55f + u * 0.12f)
+        paint.style = Paint.Style.FILL
+        paint.typeface = Typeface.DEFAULT_BOLD
+        paint.textSize = u * 0.3f
+        paint.color = Color.argb(175, 220, 228, 245)
+        paint.textAlign = Paint.Align.LEFT
+        c.drawText(clockFmt.format(java.util.Date()), u * 0.35f, y, paint)
+        if (battPct >= 0) {
+            val bw = u * 0.62f; val bh = u * 0.3f
+            val bx = width - u * 0.45f - bw; val by = y - bh * 0.85f
+            paint.style = Paint.Style.STROKE; paint.strokeWidth = 2f
+            rect.set(bx, by, bx + bw, by + bh)
+            c.drawRoundRect(rect, bh * 0.2f, bh * 0.2f, paint)
+            paint.style = Paint.Style.FILL
+            c.drawRect(bx + bw, by + bh * 0.3f, bx + bw + u * 0.06f, by + bh * 0.7f, paint)
+            paint.color = when { battCharging -> Color.argb(210, 90, 210, 120); battPct <= 15 -> Color.argb(220, 240, 70, 60); battPct <= 35 -> Color.argb(210, 240, 190, 60); else -> Color.argb(200, 220, 228, 245) }
+            rect.set(bx + 3f, by + 3f, bx + 3f + (bw - 6f) * battPct / 100f, by + bh - 3f)
+            c.drawRect(rect, paint)
+            paint.textAlign = Paint.Align.RIGHT
+            paint.color = Color.argb(175, 220, 228, 245)
+            c.drawText((if (battCharging) "⚡" else "") + "$battPct%", bx - u * 0.12f, y, paint)
+        }
+        paint.textAlign = Paint.Align.CENTER
     }
 
     /** Explosión dentro de la ciudad epicentro; el planeta no se rompe. */
@@ -1046,7 +1152,7 @@ class GameView(ctx: Context) : View(ctx) {
             paint.strokeWidth = 0.9f + 1.6f * st.z
             paint.color = Color.argb((fade * tw * (70f + 185f * st.z)).toInt().coerceIn(0, 255), tr, tg, tb)
             c.drawLine(px, py, ccx + ca * (st.dist + len), ccy + sa * (st.dist + len), paint)
-            if (wh != null && st.z > 0.62f) {
+            if (wh != null && st.z > 0.62f && gfxMode == 0) {
                 val r = s * (0.22f + 0.55f * (st.z - 0.62f) / 0.38f) * (0.85f + 0.3f * tw)
                 rect.set(px - r, py - r, px + r, py + r)
                 addPaint.alpha = (fade * tw * 210f).toInt().coerceIn(0, 255)
@@ -1210,7 +1316,7 @@ class GameView(ctx: Context) : View(ctx) {
                 val dr = planetR * 0.93f
                 path.reset(); path.addCircle(ccx, ccy, dr, Path.Direction.CW)
                 c.save(); c.clipPath(path)
-                for (kk in 0 until 2) {
+                for (kk in 0 until (if (gfxMode == 0) 2 else 1)) {
                     c.save(); c.rotate(time * (if (kk == 0) 1.2f else -0.7f) + kk * 140f, ccx, ccy)
                     rect.set(ccx - dr, ccy - dr, ccx + dr, ccy + dr)
                     cloudPaint.alpha = if (kk == 0) 60 else 38
@@ -1408,6 +1514,7 @@ class GameView(ctx: Context) : View(ctx) {
     }
 
     private fun drawHaze(c: Canvas) {
+        if (gfxMode == 1) return
         val hb = haze ?: return
         val w = width.toFloat()
         val h = height.toFloat()
@@ -1709,7 +1816,7 @@ class GameView(ctx: Context) : View(ctx) {
     private fun evEnv(): Float = (evT / 3f).coerceIn(0f, 1f) * ((EV_DUR - evT) / 4f).coerceIn(0f, 1f)
 
     private fun addPuff(x: Float, y: Float, vx: Float, vy: Float, life: Float, size: Float, grow: Float, kind: Int) {
-        if (puffs.size >= 240) return
+        if (puffs.size >= (if (gfxMode == 0) 240 else 110)) return
         puffs.add(Puff(x, y, vx, vy, life, life, size, grow, Random.nextFloat() * 360f, (Random.nextFloat() - 0.5f) * 90f, kind, Random.nextInt(3)))
     }
 
@@ -2380,9 +2487,13 @@ class GameView(ctx: Context) : View(ctx) {
         val cx = w / 2f; val cy = h * 0.45f
         val dt = frameDt
         val al = alpha.coerceIn(0f, 1f)
-        // velocidad: arranca suave, acelera en el viaje y frena al llegar
         val arrive = if (approachT >= 0f) (approachT / APPROACH).coerceIn(0f, 1f) else 0f
-        val v = (0.25f + 1.6f * (travelT / 2.5f).coerceIn(0f, 1f)) * (1f - 0.85f * arrive)
+        // etapas: 1 acercarse a la galaxia, 2 atravesarla a toda velocidad, 3 entrar al sistema solar, 4 llegar al planeta
+        val s1 = (travelT / T_GAL).coerceIn(0f, 1f)
+        val s2 = ((travelT - T_GAL) / (T_THRU - T_GAL)).coerceIn(0f, 1f)
+        val s3 = ((travelT - T_THRU) / (T_SYS - T_THRU)).coerceIn(0f, 1f)
+        val warp = if (s2 in 0.001f..0.999f) kotlin.math.sin(s2 * PI.toFloat()) else 0f
+        val v = (0.35f + 0.5f * s1 + 2.6f * warp) * (1f - 0.7f * s3) * (1f - 0.85f * arrive)
         travelZ += v * dt
         paint.style = Paint.Style.FILL
         paint.shader = null
@@ -2392,47 +2503,43 @@ class GameView(ctx: Context) : View(ctx) {
             val dir = context.cacheDir
             DiskCache.loadNamed(dir, "galaxy_travel") ?: Textures.makeTravelGalaxy(448).also { b -> saveAsync { DiskCache.saveNamed(dir, "galaxy_travel", b) } }
         } catch (e: Throwable) { galaxyBmp }
-        // galaxia: crece exponencialmente y se desvanece cuando la atravesamos
+        // 1-2: la galaxia crece, se inclina hacia nosotros y la atravesamos (se abre y se desvanece alrededor)
         val gb = travelGalaxy
-        if (gb != null) {
-            val gs = w * 0.35f * kotlin.math.exp(travelZ * 0.9f)
-            val ga = (1f - ((gs / w) - 1.2f) / 2.5f).coerceIn(0f, 1f)
-            if (ga > 0f) {
-                // la inclinación cambia al acercarnos (perspectiva) y una segunda capa da volumen al disco
-                val grow = ((gs / w) / 3f).coerceIn(0f, 1f)
-                val tilt = 0.42f + 0.45f * grow
-                for (layer in 0 until 2) {
-                    c.save(); c.translate(cx, cy); c.rotate(-20f + travelT * (3f + layer)); c.scale(1f, tilt * (1f + layer * 0.08f))
-                    val gl = gs * (1f + layer * 0.12f)
-                    rect.set(-gl, -gl, gl, gl)
-                    addPaint.alpha = ((if (layer == 0) 235 else 90) * ga * al).toInt()
-                    c.drawBitmap(gb, null, rect, addPaint)
-                    c.restore()
-                }
-                // resplandor del núcleo
-                val wh0 = sprWhite
-                if (wh0 != null) {
-                    val cr = gs * 0.35f
-                    rect.set(cx - cr, cy - cr * tilt, cx + cr, cy + cr * tilt)
-                    addPaint.alpha = (150 * ga * al).toInt()
-                    c.drawBitmap(wh0, null, rect, addPaint)
-                }
+        if (gb != null && s2 < 1f) {
+            val e1 = s1 * s1 * (3f - 2f * s1)
+            val gs = w * (0.22f + 1.6f * e1 + 6f * s2 * s2)
+            val ga = (1f - s2 * 1.15f).coerceIn(0f, 1f)
+            val tilt = 0.38f + 0.5f * e1 + 0.12f * s2
+            for (layer in 0 until 2) {
+                c.save(); c.translate(cx, cy); c.rotate(-24f + travelT * (2.5f + layer)); c.scale(1f, tilt * (1f + layer * 0.08f))
+                val gl = gs * (1f + layer * 0.12f)
+                rect.set(-gl, -gl, gl, gl)
+                addPaint.alpha = ((if (layer == 0) 235 else 90) * ga * al).toInt().coerceIn(0, 255)
+                c.drawBitmap(gb, null, rect, addPaint)
+                c.restore()
+            }
+            val wh0 = sprWhite
+            if (wh0 != null) {
+                val cr = gs * 0.3f
+                rect.set(cx - cr, cy - cr * tilt, cx + cr, cy + cr * tilt)
+                addPaint.alpha = (150 * ga * al).toInt().coerceIn(0, 255)
+                c.drawBitmap(wh0, null, rect, addPaint)
             }
         }
-        // neblina cósmica: capas que vienen hacia la cámara y la rodean
+        // neblina y nebulosas de color: sobre todo al atravesar la galaxia
         val hz = haze
-        if (hz != null) {
+        val dust = (0.25f + 0.75f * warp + 0.2f * s1 * (1f - s3)) * (1f - 0.7f * s3)
+        if (hz != null && dust > 0.02f) {
             for (k in 0 until 4) {
                 val ph = ((travelZ * 0.45f + k / 4f) % 1f)
                 val sc = 0.4f + ph * ph * 4f
                 val a = kotlin.math.sin(ph * PI.toFloat()) * 0.9f
                 c.save(); c.translate(cx, cy); c.rotate(k * 77f + travelT * 2f)
                 rect.set(-w * sc, -h * sc, w * sc, h * sc)
-                addPaint.alpha = (200 * a * al * (0.4f + 0.6f * (travelZ / 2f).coerceIn(0f, 1f))).toInt().coerceIn(0, 255)
+                addPaint.alpha = (200 * a * al * dust).toInt().coerceIn(0, 255)
                 c.drawBitmap(hz, null, rect, addPaint)
                 c.restore()
             }
-            // nebulosas de color que pasan de lado (rosa y azul), a distintas profundidades
             for (k in 0 until 3) {
                 val ph = ((travelZ * 0.33f + k * 0.31f) % 1f)
                 val zz = 1f - ph
@@ -2443,12 +2550,12 @@ class GameView(ctx: Context) : View(ctx) {
                 val rr = w * 0.35f / zz
                 rect.set(px0 - rr, py0 - rr * 0.7f, px0 + rr, py0 + rr * 0.7f)
                 val pnt = if (k % 2 == 0) hotPaint else bluePaint
-                pnt.alpha = (al * 120 * kotlin.math.sin(ph * PI.toFloat())).toInt().coerceIn(0, 255)
+                pnt.alpha = (al * 120 * dust * kotlin.math.sin(ph * PI.toFloat())).toInt().coerceIn(0, 255)
                 c.save(); c.rotate(k * 50f, px0, py0); c.drawBitmap(hz, null, rect, pnt); c.restore()
             }
         }
-        // estrellas en 3D con estela según la velocidad
-        val ts = travelStars ?: Array(260) {
+        // estrellas en 3D: estelas largas en el salto, puntos tranquilos en el sistema solar
+        val ts = travelStars ?: Array(320) {
             TStar((Random.nextFloat() - 0.5f) * 2f, (Random.nextFloat() - 0.5f) * 2f, 0.05f + Random.nextFloat(), 0f, 0.4f + Random.nextFloat() * 0.6f)
         }.also { travelStars = it }
         val f = w * 0.5f
@@ -2467,19 +2574,56 @@ class GameView(ctx: Context) : View(ctx) {
             c.drawLine(x0, y0, x1, y1, paint)
         }
         paint.style = Paint.Style.FILL
-        // soles lejanos que pasan a los lados
+        // 3: sistema solar — el sol aparece al frente, crece y queda a un lado mientras cruzamos las órbitas
         val wh = sprWhite
-        if (wh != null) {
-            for (k in 0 until 3) {
-                val ph = ((travelZ * 0.3f + k * 0.37f) % 1f)
-                val zz = 1f - ph
-                if (zz < 0.08f) continue
-                val ang = k * 2.1f + 0.6f
-                val px = cx + cos(ang) * 0.55f / zz * f * 0.5f; val py = cy + sin(ang) * 0.4f / zz * f * 0.5f
-                val r = u * 0.6f / zz
-                rect.set(px - r, py - r, px + r, py + r)
-                addPaint.alpha = (al * 200 * (1f - zz) * (if (k == 1) 0.7f else 1f)).toInt().coerceIn(0, 255)
-                c.drawBitmap(if (k == 1) (sprFire ?: wh) else wh, null, rect, addPaint)
+        val fire = sprFire
+        if (s3 > 0f && wh != null && fire != null) {
+            val e3 = s3 * s3 * (3f - 2f * s3)
+            val sunX = cx - w * 0.05f - w * 0.75f * e3 * e3
+            val sunY = cy - h * 0.05f - h * 0.12f * e3
+            val sunR = u * (0.6f + 7f * e3)
+            val sa = (s3 / 0.15f).coerceIn(0f, 1f) * (1f - arrive)
+            // órbitas tenues alrededor del sol
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 1.5f
+            for (k in 1..4) {
+                val orx = w * (0.18f + 0.22f * k) * (0.6f + 1.8f * e3)
+                paint.color = Color.argb((al * 45 * sa).toInt().coerceIn(0, 255), 170, 190, 230)
+                rect.set(sunX - orx, sunY - orx * 0.32f, sunX + orx, sunY + orx * 0.32f)
+                c.drawOval(rect, paint)
+                // un planeta pequeño en cada órbita
+                val pa = k * 1.7f + travelT * 0.15f / k
+                val ppx = sunX + cos(pa) * orx; val ppy = sunY + sin(pa) * orx * 0.32f
+                paint.style = Paint.Style.FILL
+                paint.color = Color.argb((al * 220 * sa).toInt().coerceIn(0, 255), 150 + 25 * k, 140 + 10 * k, 130)
+                c.drawCircle(ppx, ppy, u * (0.12f + 0.05f * k) * (0.7f + e3), paint)
+                paint.style = Paint.Style.STROKE
+            }
+            paint.style = Paint.Style.FILL
+            for ((bm, sc, a) in listOf(Triple(fire, 4.2f, 120), Triple(fire, 2.2f, 210), Triple(wh, 1.1f, 255))) {
+                val r = sunR * sc
+                rect.set(sunX - r, sunY - r, sunX + r, sunY + r)
+                addPaint.alpha = (a * al * sa).toInt().coerceIn(0, 255)
+                c.drawBitmap(bm, null, rect, addPaint)
+            }
+            // destello de lente en línea con el centro de la pantalla
+            for (k in 1..3) {
+                val t = k * 0.35f
+                val fx = sunX + (cx - sunX) * t * 2f; val fy = sunY + (cy - sunY) * t * 2f
+                val r = u * (0.3f + 0.25f * k)
+                rect.set(fx - r, fy - r, fx + r, fy + r)
+                addPaint.alpha = (45 * al * sa).toInt().coerceIn(0, 255)
+                c.drawBitmap(if (k == 2) fire else wh, null, rect, addPaint)
+            }
+            // nuestro planeta: un punto azulado al centro que crece hasta que empieza la llegada
+            if (approachT < 0f) {
+                val pr = u * (0.08f + 0.5f * e3)
+                paint.color = Color.argb((al * 255 * (s3 / 0.4f).coerceIn(0f, 1f)).toInt(), 150, 190, 255)
+                c.drawCircle(cx, cy, pr, paint)
+                val r = pr * 3f
+                rect.set(cx - r, cy - r, cx + r, cy + r)
+                addPaint.alpha = (90 * al).toInt()
+                c.drawBitmap(sprSteel ?: wh, null, rect, addPaint)
             }
         }
     }
@@ -2628,7 +2772,7 @@ class GameView(ctx: Context) : View(ctx) {
             c.drawRoundRect(r, u * 0.45f, u * 0.45f, paint)
             paint.style = Paint.Style.FILL
             paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
-            paint.textSize = u * 0.34f
+            paint.textSize = u * 0.4f
             c.drawText(when (i) { 0 -> "MENÚ"; 1 -> "PERSONALIZAR"; else -> "PERFIL" }, r.centerX(), r.centerY() + u * 0.12f, paint)
         }
         val e = tabT * tabT * (3f - 2f * tabT)
@@ -2696,6 +2840,19 @@ class GameView(ctx: Context) : View(ctx) {
         c.drawText(if (on) "SÍ" else "NO", if (on) sw.left + u * 0.6f else sw.right - u * 0.6f, sw.centerY() + u * 0.11f, paint)
     }
 
+    private fun drawSegments(c: Canvas, rs: Array<RectF>, labels: Array<String>, sel: Int) {
+        for (i in rs.indices) {
+            val r = rs[i]
+            paint.style = Paint.Style.FILL
+            paint.color = if (i == sel) Color.rgb(56, 110, 230) else Color.argb(200, 30, 38, 70)
+            c.drawRoundRect(r, u * 0.35f, u * 0.35f, paint)
+            paint.color = Color.WHITE
+            paint.textAlign = Paint.Align.CENTER
+            paint.textSize = u * 0.4f
+            c.drawText(labels[i], r.centerX(), r.centerY() + u * 0.14f, paint)
+        }
+    }
+
     private fun drawSettings(c: Canvas) {
         val an = settingsAnim.coerceIn(0f, 1f)
         c.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), (255 * an).toInt())
@@ -2723,6 +2880,19 @@ class GameView(ctx: Context) : View(ctx) {
         drawSwitch(c, musicSw, "Música", music.enabled)
         drawSwitch(c, sfxSw, "Efectos de sonido", sfx.enabled)
         drawSwitch(c, voiceSw, "Voz del anunciador", announcer.enabled)
+        paint.textAlign = Paint.Align.LEFT
+        paint.color = Color.WHITE
+        paint.textSize = u * 0.45f
+        c.drawText("Cuadros por segundo", panelRect.left + u * 0.6f, fpsRect[0].top - u * 0.25f, paint)
+        c.drawText("Gráficos", panelRect.left + u * 0.6f, gfxRect[0].top - u * 0.25f, paint)
+        drawSegments(c, fpsRect, arrayOf("120", "60", "Ahorro 30"), fpsMode)
+        drawSegments(c, gfxRect, arrayOf("Calidad", "Rendimiento"), gfxMode)
+        if (gfxMode != gfxAtStart) {
+            paint.textAlign = Paint.Align.CENTER
+            paint.textSize = u * 0.3f
+            paint.color = Color.argb(220, 255, 210, 120)
+            c.drawText("La calidad de texturas se aplica al volver a abrir el juego", width / 2f, gfxRect[0].bottom + u * 0.55f, paint)
+        }
         paint.style = Paint.Style.FILL
         paint.color = Color.argb(255, 40, 60, 110)
         c.drawRoundRect(closeRect, u * 0.4f, u * 0.4f, paint)
@@ -2748,16 +2918,50 @@ class GameView(ctx: Context) : View(ctx) {
         c.drawText("Récord: $best      Lingotes: $totalIngots", width / 2f, escapeRect.top - u * 0.7f, paint)
         val pulse = 0.5f + 0.5f * sin(time * 3f)
         val ok = ready()
-        paint.color = if (ok) Color.argb((255 * a).toInt(), 200 + (40 * pulse).toInt(), 40, 40) else Color.argb((200 * a).toInt(), 60, 70, 100)
-        c.drawRoundRect(escapeRect, u * 0.5f, u * 0.5f, paint)
+        val al = (255 * a).toInt()
+        val er = escapeRect
+        val rad = er.height() * 0.42f
+        // resplandor que respira detrás del botón
+        val rg = sprRed
+        if (ok && rg != null) {
+            rect.set(er.left - u * 1.2f, er.top - u * 1.2f, er.right + u * 1.2f, er.bottom + u * 1.2f)
+            addPaint.alpha = ((70 + 60 * pulse) * a).toInt()
+            c.drawBitmap(rg, null, rect, addPaint)
+        }
+        paint.shader = if (ok) LinearGradient(0f, er.top, 0f, er.bottom, intArrayOf(Color.argb(al, 255, 96, 80), Color.argb(al, 200, 30, 30), Color.argb(al, 120, 10, 14)), floatArrayOf(0f, 0.5f, 1f), Shader.TileMode.CLAMP) else null
+        if (!ok) paint.color = Color.argb((200 * a).toInt(), 60, 70, 100)
+        c.drawRoundRect(er, rad, rad, paint)
+        paint.shader = null
+        if (ok) {
+            // brillo que recorre el botón cada pocos segundos (efecto reluciente)
+            val ph = (time % 3.2f) / 1.1f
+            if (ph < 1f) {
+                path.reset(); path.addRoundRect(er, rad, rad, Path.Direction.CW)
+                c.save(); c.clipPath(path)
+                val bx = er.left - er.width() * 0.3f + er.width() * 1.6f * ph
+                paint.shader = LinearGradient(bx - u * 1.2f, 0f, bx + u * 1.2f, 0f,
+                    intArrayOf(Color.argb(0, 255, 255, 255), Color.argb((150 * a).toInt(), 255, 245, 230), Color.argb(0, 255, 255, 255)), null, Shader.TileMode.CLAMP)
+                c.save(); c.skew(-0.35f, 0f)
+                c.drawRect(bx - u * 1.2f + er.top * 0.35f, er.top, bx + u * 1.2f + er.bottom * 0.35f, er.bottom, paint)
+                c.restore()
+                paint.shader = null
+                c.restore()
+            }
+            // reflejo superior suave
+            paint.color = Color.argb((55 * a).toInt(), 255, 255, 255)
+            rect.set(er.left + u * 0.3f, er.top + u * 0.12f, er.right - u * 0.3f, er.centerY() - u * 0.1f)
+            c.drawRoundRect(rect, rad * 0.6f, rad * 0.6f, paint)
+        }
         paint.style = Paint.Style.STROKE
         paint.strokeWidth = 3f
-        paint.color = Color.argb((255 * a).toInt(), 255, 170, 150)
-        c.drawRoundRect(escapeRect, u * 0.5f, u * 0.5f, paint)
+        paint.color = Color.argb(al, 255, (170 + 60 * pulse).toInt(), 150)
+        c.drawRoundRect(er, rad, rad, paint)
         paint.style = Paint.Style.FILL
-        paint.color = Color.argb((255 * a).toInt(), 255, 255, 255)
-        paint.textSize = u * 0.8f
-        c.drawText(if (ok) "ESCAPAR" else "Cargando...", width / 2f, escapeRect.centerY() + u * 0.28f, paint)
+        paint.color = Color.argb(al, 255, 255, 255)
+        paint.textSize = u * 0.95f
+        paint.setShadowLayer(u * 0.12f, 0f, u * 0.05f, Color.argb((160 * a).toInt(), 60, 0, 0))
+        c.drawText(if (ok) "ESCAPAR" else "Cargando...", width / 2f, er.centerY() + u * 0.33f, paint)
+        paint.clearShadowLayer()
     }
 
     private fun cardX(i: Int) = u * 0.4f + carouselOff + i * (cardW + gap)
@@ -3698,6 +3902,13 @@ class GameView(ctx: Context) : View(ctx) {
                         announcer.enabled = !announcer.enabled
                         try { prefs.edit().putBoolean("voice", announcer.enabled).apply() } catch (ex: Exception) { }
                         if (announcer.enabled) announcer.say(Announcer.DEVAST)
+                    } else if (fpsRect.any { it.contains(e.x, e.y) }) {
+                        fpsMode = fpsRect.indexOfFirst { it.contains(e.x, e.y) }
+                        try { prefs.edit().putInt("fps", fpsMode).apply() } catch (ex: Exception) { }
+                        applyRefresh()
+                    } else if (gfxRect.any { it.contains(e.x, e.y) }) {
+                        gfxMode = gfxRect.indexOfFirst { it.contains(e.x, e.y) }
+                        try { prefs.edit().putInt("gfx", gfxMode).apply() } catch (ex: Exception) { }
                     } else if (closeRect.contains(e.x, e.y) || !panelRect.contains(e.x, e.y)) settingsOpen = false
                 } else if (phase == 0 && palPick >= 0) {
                     paletteTap(e.x, e.y)

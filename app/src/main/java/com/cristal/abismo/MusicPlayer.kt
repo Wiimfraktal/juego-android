@@ -5,14 +5,62 @@ import android.media.AudioAttributes
 import android.media.MediaPlayer
 import android.media.SoundPool
 
-/** Reproduce las dos pistas en bucle con fundido suave al cambiar de una a otra. */
+/**
+ * Música en bucle sin cortes: cada pista usa dos reproductores encadenados (setNextMediaPlayer), así al terminar
+ * la canción la siguiente vuelta empieza sin pausa ni tirón. Todo lo pesado (crear y preparar) va en un hilo
+ * aparte; el hilo del juego solo ajusta volúmenes, y únicamente cuando cambian.
+ */
 class MusicPlayer(private val ctx: Context) {
-    private class Voice(val mp: MediaPlayer) {
+    private inner class Voice(val res: Int) {
+        @Volatile var mp: MediaPlayer? = null
+        @Volatile var next: MediaPlayer? = null
         var vol = 0f
-        var target = 1f
+        var applied = -1f
+        @Volatile var dead = false
+
+        fun start() = worker.post {
+            val m = create() ?: return@post
+            if (dead) { safe { m.release() }; return@post }
+            safe { m.setVolume(0f, 0f); m.start() }
+            mp = m
+            chain(m)
+        }
+
+        private fun create(): MediaPlayer? = try { MediaPlayer.create(ctx, res) } catch (e: Exception) { null }
+
+        /** Prepara la siguiente vuelta y la encadena para que empiece justo al terminar la actual. */
+        private fun chain(m: MediaPlayer) {
+            val n = create() ?: run { safe { m.isLooping = true }; return }
+            if (dead) { safe { n.release() }; return }
+            safe { n.setVolume(applied.coerceAtLeast(0f), applied.coerceAtLeast(0f)) }
+            next = n
+            safe { m.setNextMediaPlayer(n) }
+            m.setOnCompletionListener { old ->
+                worker.post {
+                    mp = n; next = null
+                    safe { old.release() }
+                    if (!dead) chain(n) else safe { n.release() }
+                }
+            }
+        }
+
+        fun setVol(v: Float) {
+            if (kotlin.math.abs(v - applied) < 0.004f) return
+            applied = v
+            safe { mp?.setVolume(v, v) }
+            safe { next?.setVolume(v, v) }
+        }
+
+        fun kill() {
+            dead = true
+            worker.post { safe { mp?.stop() }; safe { mp?.release() }; safe { next?.release() }; mp = null; next = null }
+        }
     }
 
-    private val tracks = intArrayOf(R.raw.menu_theme, R.raw.game_theme, R.raw.theme_tension, R.raw.theme_rock, R.raw.theme_heroic, R.raw.theme_neutron, R.raw.theme_duro, R.raw.theme_coro, R.raw.theme_regio)
+    private val thread = android.os.HandlerThread("musica").apply { start() }
+    private val worker = android.os.Handler(thread.looper)
+    private val tracks = intArrayOf(R.raw.menu_theme, R.raw.game_theme, R.raw.theme_tension, R.raw.theme_rock, R.raw.theme_heroic,
+        R.raw.theme_neutron, R.raw.theme_duro, R.raw.theme_coro, R.raw.theme_regio)
     private var cur: Voice? = null
     private val fading = ArrayList<Voice>()
     private var track = -1
@@ -24,18 +72,11 @@ class MusicPlayer(private val ctx: Context) {
 
     private fun startCurrent() {
         if (track < 0 || !enabled) return
-        safe {
-            val mp = MediaPlayer.create(ctx, tracks[track]) ?: return
-            mp.isLooping = true
-            mp.setVolume(0f, 0f)
-            mp.start()
-            cur = Voice(mp)
-        }
+        cur = Voice(tracks[track]).also { it.start() }
     }
 
     private fun retireCurrent() {
         val c = cur ?: return
-        c.target = 0f
         fading.add(c)
         cur = null
     }
@@ -56,36 +97,33 @@ class MusicPlayer(private val ctx: Context) {
         val level = LEVEL * duck
         cur?.let {
             it.vol = (it.vol + dt / 1.8f).coerceAtMost(1f)
-            safe { it.mp.setVolume(it.vol * level, it.vol * level) }
+            it.setVol(it.vol * level)
         }
         val i = fading.iterator()
         while (i.hasNext()) {
             val v = i.next()
             v.vol -= dt / 1.2f
-            if (v.vol <= 0f) {
-                safe { v.mp.stop() }
-                safe { v.mp.release() }
-                i.remove()
-            } else safe { v.mp.setVolume(v.vol * level, v.vol * level) }
+            if (v.vol <= 0f) { v.kill(); i.remove() } else v.setVol(v.vol * level)
         }
     }
 
     fun pause() {
-        cur?.let { v -> safe { if (v.mp.isPlaying) v.mp.pause() } }
-        for (v in fading) safe { if (v.mp.isPlaying) v.mp.pause() }
+        val all = listOfNotNull(cur) + fading
+        worker.post { for (v in all) safe { v.mp?.let { if (it.isPlaying) it.pause() } } }
     }
 
     fun resume() {
         if (!enabled) return
-        cur?.let { v -> safe { v.mp.start() } }
-        for (v in fading) safe { v.mp.start() }
+        val all = listOfNotNull(cur) + fading
+        worker.post { for (v in all) safe { v.mp?.start() } }
     }
 
     fun release() {
-        cur?.let { v -> safe { v.mp.release() } }
-        for (v in fading) safe { v.mp.release() }
+        cur?.kill()
+        for (v in fading) v.kill()
         cur = null
         fading.clear()
+        worker.post { thread.quitSafely() }
     }
 
     private companion object {
