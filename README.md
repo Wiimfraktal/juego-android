@@ -28,3 +28,4 @@ Batería, guitarras y contrabajo de los temas Épica, Neutron y Duro: bancos CC0
 Piano de cola de Neutron: Salamander Grand Piano V3 de Alexander Holm (licencia CC-BY 3.0), https://github.com/sfzinstruments/SalamanderGrandPiano .
 Órgano de tubos de Épica coral: grabado por Simon Dalzell (Ivy Audio), distribuido en VSCO 2 CE por Versilian Studios.
 Clarinete, flauta, violín solista, arpa, güiro y congas: VSCO 2 Community Edition (CC0).
+Coro de Épica coral: Sonatina Symphonic Orchestra (Mattias Westlund, licencia Creative Commons Sampling Plus 1.0), https://github.com/peastman/sso .

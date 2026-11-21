@@ -101,12 +101,12 @@ class GameView(ctx: Context) : View(ctx) {
         "Las naves bomba parpadean en rojo: al colocarse destruyen todo lo que tengan cerca.",
         "Las rachas de líneas seguidas dan medallas y las anuncia la voz del comandante.",
         "El hierro de cada nave llena la barra; al completarla ganas lingotes.",
-        "Si los bordes parpadean en rojo, las naves están demasiado cerca del centro.",
+        "La franja roja cruza todo el centro: si una nave se queda ahí, pierdes.",
         "Las alertas de partida (meteoros, eclipses, tormentas) son solo visuales: no afectan el juego.",
         "En Personalizar compras superficies, naves, fondos y música, y diseñas tu emblema.",
         "En Perfil ves tus estadísticas, medallas y logros, y puedes cambiar tu nombre de piloto.",
-        "Mantén libre la zona central: es lo que decide la partida.",
-        "Cada nivel aumenta un poco la velocidad de las naves."
+        "Las naves bomba brillan en azul: estallan como plasma y limpian lo que tengan cerca.",
+        "En MEJORAS compras Regeneración (seguir tras perder) y Sobre-escudo (salva la franja roja)."
     )
     private val tip = tips[Random.nextInt(tips.size)]
     private var game: Game? = null
@@ -3210,7 +3210,7 @@ class GameView(ctx: Context) : View(ctx) {
         paint.textSize = u * 0.24f
         paint.color = Color.argb(150, 190, 205, 235)
         c.drawText("Sonidos: Salamander Grand Piano (A. Holm, CC-BY), VSCO 2 CE (Versilian Studios),", width / 2f, panelRect.bottom + u * 0.5f, paint)
-        c.drawText("órgano de Ivy Audio y bancos CC0 de Karoryfer Lecolds", width / 2f, panelRect.bottom + u * 0.85f, paint)
+        c.drawText("órgano de Ivy Audio, coro de Sonatina (CC Sampling+) y bancos CC0 de Karoryfer Lecolds", width / 2f, panelRect.bottom + u * 0.85f, paint)
     }
 
     private fun drawPlayTab(c: Canvas, a: Float) {
@@ -4127,7 +4127,7 @@ class GameView(ctx: Context) : View(ctx) {
         if (phaseT < 7f && !g.over && !paused) {
             paint.textSize = u * 0.42f
             paint.color = Color.argb((255 * min(1f, (7f - phaseT))).toInt(), 255, 255, 255)
-            c.drawText("Arrastra: mueve la nave y rodea el centro", width / 2f, height - u * 1.8f, paint)
+            c.drawText("Arrastra: mueve la nave lejos de la franja roja", width / 2f, height - u * 1.8f, paint)
             c.drawText("Toca: gira   ·   Empuja rápido: la lanzas lejos", width / 2f, height - u * 1.2f, paint)
         }
         if (g.over) {

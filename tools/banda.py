@@ -221,6 +221,10 @@ class Band:
             self.quinto = one("Percussion/Quinto-HitN_v2_rr1_Sum.wav")
             self.tamb = one("Percussion/Tamb1-Hit_v2_rr1_Sum.wav")
             self.cym_swell = one("Percussion/susCymb1-cresc-Median_v1.wav")
+        C = os.path.join(root, "sso/Sonatina Symphonic Orchestra/Samples-looped/Chorus")
+        cm = lambda n: (lambda m: 12 * (int(m.group(3)) + 1) + PC[m.group(1)] + (1 if m.group(2) else 0))(re.search(r"-([a-g])(#?)(\d)\.wav$", n)) if re.search(r"-([a-g])(#?)(\d)\.wav$", n) else None
+        self.choir_m = inst_from(os.path.join(C, "chorus-male-*.wav"), mapper=cm, level=0.2)
+        self.choir_f = inst_from(os.path.join(C, "chorus-female-*.wav"), mapper=cm, level=0.2)
         E = os.path.join(root, "karoryfer.emilyguitar/notes")
         self.egtr = inst_from(os.path.join(E, "*_f_rr1.wav"))
         self.egtr_m = inst_from(os.path.join(E, "*_mp_rr2.wav"))
@@ -484,7 +488,11 @@ def epica_coro(lib, band):
         m.add(t0, lib.tuba.note(root, bar + 0.4, att=0.25, rel=1.0), 0.32, pan=0.1)
         m.add(t0, lib.tbn.note(root + 12, bar + 0.4, att=0.3, rel=1.0), 0.24, pan=-0.2)
         m.add(t0, lib.tbn.note(root + 12 + q, bar + 0.4, att=0.3, rel=1.0), 0.2, pan=0.25)
-        m.add(t0, lib.hn.note(root + 19, bar + 0.4, att=0.35, rel=1.0), 0.2, pan=-0.35)
+        m.add(t0, lib.hn.note(root + 19, bar + 0.4, att=0.35, rel=1.0), 0.14, pan=-0.35)
+        # coro masculino real: bajos y tenores en acorde cerrado, entrando suave y sosteniendo
+        for i, n in enumerate((root + 12, root + 19, root + 24 + q)):
+            nn = n if n < 64 else n - 12
+            m.add(t0, band.choir_m.note(nn, bar + 0.5, att=0.6, rel=1.4), 0.3, pan=-0.3 + 0.3 * i)
         if b >= 8:
             m.add(t0, lib.hn.note(root + 24 + q, bar + 0.4, att=0.4, rel=1.0), 0.17, pan=0.35)
             for i, n in enumerate(tri):
@@ -502,7 +510,10 @@ def epica_coro(lib, band):
     for base in (0, 8):
         for n, bt, d in mel:
             st = base * bar + bt * beat
-            m.add(st, lib.hn.note(n - 12, d * beat + 0.3, att=0.12, rel=0.7), 0.3, pan=0.05)
+            m.add(st, lib.hn.note(n - 12, d * beat + 0.3, att=0.12, rel=0.7), 0.18, pan=0.05)
+            m.add(st, band.choir_m.note(n - 12, d * beat + 0.4, att=0.2, rel=0.9), 0.42, pan=0.0)
+            if base == 8:
+                m.add(st, band.choir_f.note(n, d * beat + 0.4, att=0.25, rel=0.9), 0.16, pan=0.1)
             if base == 8:
                 m.add(st, band.tpt_vib.note(n, d * beat + 0.3, att=0.1, rel=0.7), 0.2, pan=0.1)
                 m.add(st, band.organ.note(n, d * beat + 0.2, att=0.05, rel=0.8), 0.08, pan=0.0)
